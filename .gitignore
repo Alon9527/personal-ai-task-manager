@@ -1,0 +1,33 @@
+.nuxt
+.output
+node_modules
+.env
+.playwright
+.pnpm-cache
+.pnpm-data
+.pnpm-home
+playwright-report
+test-results
+# Local build and generated output
+/src-tauri/target/
+/src-tauri/gen/
+/--host/
+/output/
+/test-results/
+/playwright-report/
+/visual-qa/
+/dist
+/.superpowers/
+
+# Local-only data, secrets and temporary signing keys
+.env*
+*.sqlite
+*.sqlite3
+*.db
+.tauri-update-private.key*
+*.bak
+*.log
+
+# Root-level visual QA exports
+/*.png
+/*.jpg
