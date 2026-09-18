@@ -45,6 +45,8 @@ type TaskRow = {
   description: string
   priority: Task['priority']
   due_date: string | null
+  start_date?: string | null
+  completion_date?: string | null
   due_time: string | null
   is_focus: boolean
   status?: Task['status']
@@ -285,6 +287,8 @@ export class SupabaseWorkspaceRepository implements WorkspaceGateway {
         description: input.description,
         priority: input.priority,
         due_date: input.dueDate,
+        start_date: input.startDate ?? null,
+        completion_date: input.completionDate ?? null,
         due_time: input.dueTime,
         is_focus: input.isFocus,
         status: input.status ?? 'todo',
@@ -307,6 +311,8 @@ export class SupabaseWorkspaceRepository implements WorkspaceGateway {
     if (patch.milestoneId !== undefined) body.milestone_id = patch.milestoneId
     if (patch.priority !== undefined) body.priority = patch.priority
     if (patch.dueDate !== undefined) body.due_date = patch.dueDate
+    if (patch.startDate !== undefined) body.start_date = patch.startDate
+    if (patch.completionDate !== undefined) body.completion_date = patch.completionDate
     if (patch.dueTime !== undefined) body.due_time = patch.dueTime
     if (patch.isFocus !== undefined) body.is_focus = patch.isFocus
     if (patch.status !== undefined) body.status = patch.status
@@ -463,6 +469,8 @@ function mapTask(row: TaskRow): Task {
     description: row.description,
     priority: row.priority,
     dueDate: row.due_date,
+    startDate: row.start_date ?? null,
+    completionDate: row.completion_date ?? null,
     dueTime: row.due_time?.slice(0, 5) ?? null,
     isFocus: row.is_focus,
     status: row.status ?? (row.completed_at ? 'done' : 'todo'),

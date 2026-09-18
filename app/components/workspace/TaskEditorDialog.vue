@@ -7,6 +7,9 @@ import type { CreateTaskInput } from '../../data/workspace-gateway'
 import { taskAttachmentSchema } from '#shared/workspace'
 import type { TaskAttachment } from '#shared/workspace'
 import { addTaskAttachments, isPreviewableTaskImage } from '../../services/task-attachments'
+import { clipboardImages } from '../../services/clipboard-images'
+import TaskDateInput from './TaskDateInput.vue'
+import { normalizeTaskDateInput } from '../../utils/task-date-input'
 
 const props = withDefaults(defineProps<{
   open: boolean
@@ -15,6 +18,9 @@ const props = withDefaults(defineProps<{
   milestones?: Milestone[]
   defaultProjectId?: string | null
   attachmentsEnabled?: boolean
+  embedded?: boolean
+  defaultDate?: string
+  defaultTime?: string
 }>(), {
   milestones: () => [],
   defaultProjectId: null,
@@ -33,6 +39,8 @@ const formSchema = z.object({
   milestoneId: taskSchema.shape.milestoneId,
   priority: taskSchema.shape.priority,
   dueDate: z.union([z.literal(''), z.iso.date()]),
+  startDate: z.union([z.literal(''), z.iso.date()]),
+  completionDate: z.union([z.literal(''), z.iso.date()]),
   dueTime: z.union([z.literal(''), z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)]),
   isFocus: z.boolean(),
   status: taskStatusSchema,
@@ -43,6 +51,8 @@ const formSchema = z.object({
 })
 
 const form = reactive(defaultForm())
+const formId = useId()
+let attachmentGeneration = 0
 const validationError = ref<string | null>(null)
 const attachmentInput = ref<HTMLInputElement | null>(null)
 const attachmentBusy = ref(false)
@@ -60,6 +70,8 @@ const filteredMilestones = computed(() => props.milestones.filter(milestone => m
 watch(
   () => [props.open, props.task, props.defaultProjectId] as const,
   () => {
+    attachmentGeneration++
+    attachmentBusy.value = false
     Object.assign(form, defaultForm(props.task))
     validationError.value = null
     attachmentError.value = null
@@ -84,18 +96,24 @@ function defaultForm(task: Task | null = null) {
     projectId: task ? (task.projectId ?? '') : (props.defaultProjectId ?? ''),
     milestoneId: task?.milestoneId ?? '',
     priority: task?.priority ?? '',
-    dueDate: task?.dueDate ?? '',
-    dueTime: task?.dueTime ?? '',
+    dueDate: task?.dueDate ?? props.defaultDate ?? '',
+    startDate: task?.startDate ?? '',
+    completionDate: task?.completionDate ?? '',
+    dueTime: task?.dueTime ?? props.defaultTime ?? '',
     isFocus: task?.isFocus ?? false,
     status: task ? getTaskStatus(task) : 'todo',
     importance: task ? getTaskImportance(task) : 'normal',
     estimatedMinutes: task?.estimatedMinutes ?? '',
     reminderLocal: toLocalDateTimeInput(task?.reminderAt ?? null),
-    attachments: structuredClone(task?.attachments ?? []),
+    attachments: taskAttachmentSchema.array().parse(task?.attachments ?? []),
   }
 }
 
 function submit() {
+  if (attachmentBusy.value) return
+  form.startDate = normalizeTaskDateInput(form.startDate)
+  form.dueDate = normalizeTaskDateInput(form.dueDate)
+  form.completionDate = normalizeTaskDateInput(form.completionDate)
   const result = formSchema.safeParse({
     ...form,
     projectId: form.projectId || null,
@@ -103,10 +121,17 @@ function submit() {
     priority: form.priority || null,
   })
   if (!result.success) {
-    validationError.value = result.error.issues[0]?.message ?? '请检查任务信息'
+    const issue = result.error.issues[0]
+    validationError.value = issue?.path[0] === 'completionDate'
+      ? '完成日期无效，请输入有效日期，例如 260918 或 2026-09-18'
+      : issue?.message ?? '请检查任务信息'
     return
   }
   validationError.value = null
+  if (result.data.startDate && result.data.dueDate && result.data.startDate > result.data.dueDate) {
+    validationError.value = '截止日期不能早于开始日期'
+    return
+  }
   emit('save', {
     title: result.data.title,
     description: result.data.description,
@@ -114,6 +139,8 @@ function submit() {
     milestoneId: result.data.milestoneId,
     priority: result.data.priority,
     dueDate: result.data.dueDate || null,
+    startDate: result.data.startDate || null,
+    completionDate: result.data.completionDate || null,
     dueTime: result.data.dueTime || null,
     isFocus: result.data.isFocus,
     status: result.data.status,
@@ -134,22 +161,38 @@ async function handleAttachmentFiles(event: Event) {
   if (!props.attachmentsEnabled) return
   const input = event.target as HTMLInputElement
   const files = Array.from(input.files ?? [])
+  await attachFiles(files)
+  input.value = ''
+}
+
+async function handlePaste(event: ClipboardEvent) {
+  if (!props.attachmentsEnabled) return
+  const files = clipboardImages(event.clipboardData)
+  if (!files.length) return
+  event.preventDefault()
+  await attachFiles(files)
+}
+
+async function attachFiles(files: File[]) {
+  if (attachmentBusy.value || !props.attachmentsEnabled) return
   if (files.length === 0) return
+  const generation = attachmentGeneration
   attachmentBusy.value = true
   attachmentError.value = null
   try {
-    form.attachments = await addTaskAttachments(form.attachments, files)
+    const attachments = await addTaskAttachments(form.attachments, files)
+    if (generation === attachmentGeneration && props.open) form.attachments = attachments
   }
   catch (error) {
-    attachmentError.value = error instanceof Error ? error.message : '附件添加失败，请重试'
+    if (generation === attachmentGeneration) attachmentError.value = error instanceof Error ? error.message : '附件添加失败，请重试'
   }
   finally {
-    attachmentBusy.value = false
-    input.value = ''
+    if (generation === attachmentGeneration) attachmentBusy.value = false
   }
 }
 
 function removeAttachment(id: string) {
+  if (attachmentBusy.value) return
   form.attachments = form.attachments.filter(attachment => attachment.id !== id)
 }
 
@@ -179,18 +222,29 @@ function toLocalDateTimeInput(value: string | null) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="open" class="dialog-backdrop" @click.self="emit('close')">
-      <section class="workspace-dialog task-editor" role="dialog" aria-modal="true" aria-labelledby="task-editor-title">
+  <Teleport to="body" :disabled="embedded">
+    <div v-if="open" :class="embedded ? 'suite-inline-editor' : 'dialog-backdrop'" @click.self="!embedded && emit('close')">
+      <section @paste="handlePaste" class="workspace-dialog task-editor" :role="embedded ? 'region' : 'dialog'" :aria-modal="embedded ? undefined : true" aria-labelledby="task-editor-title">
         <header class="dialog-header">
           <div>
             <small>TASK</small>
             <h2 id="task-editor-title">{{ task ? '编辑任务' : '新建任务' }}</h2>
           </div>
-          <button type="button" aria-label="关闭" @click="emit('close')"><UIcon name="i-lucide-x" /></button>
+          <div class="task-header-actions"><button type="button" class="secondary-action" @click="emit('close')">取消</button><button type="submit" :form="formId" class="primary-action" :disabled="attachmentBusy">{{ task ? '保存更改' : '创建任务' }}</button></div><button type="button" aria-label="关闭" @click="emit('close')"><UIcon name="i-lucide-x" /></button>
         </header>
 
-        <form @submit.prevent="submit">
+        <form :id="formId" v-if="embedded" class="suite-compact-form" @submit.prevent="submit">
+          <label class="form-field"><span>任务标题</span><input v-model="form.title" name="title" placeholder="要推进什么？"></label>
+          <fieldset class="task-status-field"><legend>状态</legend><div class="task-status-options" role="radiogroup" aria-label="任务状态"><label v-for="option in taskStatusOptions.filter(o=>!['inbox','cancelled'].includes(o.value))" :key="option.value" :class="{selected:form.status===option.value}"><input v-model="form.status" type="radio" name="status-choice" :value="option.value"><span>{{option.label}}</span></label></div></fieldset>
+          <fieldset class="task-status-field"><legend>重要性</legend><div class="task-status-options" role="radiogroup" aria-label="重要性"><label :class="{selected:form.importance==='normal'}"><input v-model="form.importance" type="radio" value="normal"><span>普通</span></label><label :class="{selected:form.importance==='important'}"><input v-model="form.importance" type="radio" value="important"><span>重要</span></label></div></fieldset>
+          <div class="suite-date-fields"><label class="form-field"><span>开始日期</span><TaskDateInput v-model="form.startDate" name="startDate" label="开始日期" /></label><label class="form-field"><span>截止日期</span><TaskDateInput v-model="form.dueDate" name="dueDate" label="截止日期" /></label><label class="form-field"><span>完成日期（可选）</span><TaskDateInput v-model="form.completionDate" name="completionDate" label="完成日期" /><small>可输入 260918（2026-09-18），不改变任务状态</small></label></div>
+          <label class="form-field"><span>提醒</span><input v-model="form.reminderLocal" name="reminderAt" type="datetime-local"></label>
+          <label class="form-field"><span>任务描述</span><textarea v-model="form.description" name="description" rows="2" placeholder="讨论背景、结果或下一步" /></label>
+          <section class="suite-compact-attachments"><span>附件</span><button type="button" :disabled="!attachmentsEnabled||attachmentBusy" @click="chooseAttachmentFiles"><UIcon name="i-lucide-paperclip" />添加文件 / 图片</button><input ref="attachmentInput" type="file" multiple hidden @change="handleAttachmentFiles"><div v-for="attachment in form.attachments" :key="attachment.id"><button type="button" @click="downloadAttachment(attachment)">{{attachment.name}}</button><button type="button" :aria-label="`移除 ${attachment.name}`" @click="removeAttachment(attachment.id)">×</button></div><small v-if="attachmentError" role="alert">{{attachmentError}}</small></section>
+          <details class="suite-editor-more"><summary>项目、里程碑与更多选项</summary><label class="form-field"><span>项目</span><select v-model="form.projectId"><option value="">无项目</option><option v-for="p in projects" :key="p.id" :value="p.id">{{p.name}}</option></select></label><label class="form-field"><span>里程碑</span><select v-model="form.milestoneId"><option value="">无里程碑</option><option v-for="m in filteredMilestones" :key="m.id" :value="m.id">{{m.title}}</option></select></label><label class="form-field"><span>优先级</span><select v-model="form.priority"><option value="">未设置</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label><label><input v-model="form.isFocus" type="checkbox">今日重点</label></details>
+          <p v-if="validationError" role="alert" class="inline-error">{{validationError}}</p>
+        </form>
+        <form :id="formId" v-else @submit.prevent="submit">
           <label class="form-field form-field-wide">
             <span>任务标题</span>
             <input v-model="form.title" name="title" autofocus placeholder="要推进什么？">
@@ -204,7 +258,7 @@ function toLocalDateTimeInput(value: string | null) {
               远端工作区暂不上传附件；切换到本机工作区后可添加文件和图片。
             </p>
             <div class="task-attachment-heading">
-              <div><span>附件</span><small>图片可预览，其他文件可下载</small></div>
+              <div><span>附件</span><small>支持 Ctrl+V 粘贴图片；图片可预览，其他文件可下载</small></div>
               <button type="button" data-add-attachment :disabled="!attachmentsEnabled || attachmentBusy || form.attachments.length >= 8" @click="chooseAttachmentFiles">
                 <UIcon name="i-lucide-paperclip" />{{ attachmentBusy ? '正在添加…' : '添加文件或图片' }}
               </button>
@@ -267,18 +321,9 @@ function toLocalDateTimeInput(value: string | null) {
               <option value="high">高</option>
             </select>
           </label>
-          <label class="form-field">
-            <span>日期</span>
-            <input v-model="form.dueDate" name="dueDate" type="date">
-          </label>
-          <label class="form-field">
-            <span>时间</span>
-            <input v-model="form.dueTime" name="dueTime" type="time">
-          </label>
-          <label class="form-field">
-            <span>预计时长（分钟）</span>
-            <input v-model.number="form.estimatedMinutes" name="estimatedMinutes" type="number" min="5" max="1440" step="5" placeholder="例如 30">
-          </label>
+<label class="form-field"><span>开始日期</span><TaskDateInput v-model="form.startDate" name="startDate" label="开始日期" /></label><label class="form-field"><span>截止日期</span><TaskDateInput v-model="form.dueDate" name="dueDate" label="截止日期" /></label><label class="form-field"><span>完成日期（可选）</span><TaskDateInput v-model="form.completionDate" name="completionDate" label="完成日期" /><small>可输入 260918（2026-09-18），不改变任务状态</small></label>
+
+
           <label class="form-field">
             <span>提醒时间</span>
             <input v-model="form.reminderLocal" name="reminderAt" type="datetime-local">
@@ -288,10 +333,7 @@ function toLocalDateTimeInput(value: string | null) {
             <span><b>今日重点</b><small>放在优先完成分组</small></span>
           </label>
           <p v-if="validationError" role="alert" class="inline-error">{{ validationError }}</p>
-          <footer class="dialog-actions form-field-wide">
-            <button type="button" class="secondary-action" @click="emit('close')">取消</button>
-            <button type="submit" class="primary-action">{{ task ? '保存更改' : '创建任务' }}</button>
-          </footer>
+
         </form>
       </section>
     </div>
@@ -299,6 +341,10 @@ function toLocalDateTimeInput(value: string | null) {
 </template>
 
 <style scoped>
+.task-editor .suite-date-fields{grid-template-columns:minmax(0,1fr)}
+.task-header-actions{display:flex;gap:8px;margin-left:auto}.task-header-actions button{width:auto;height:auto;padding:9px 14px;font-size:14px;white-space:nowrap}
+.task-editor .task-status-options input[type=radio]{width:1px!important;min-width:1px!important;height:1px!important;padding:0!important;border:0!important}
+.task-editor .task-status-options span [class*=icon]{border:0;padding:0;min-height:0;background:transparent;box-shadow:none}
 .task-editor{max-height:calc(100dvh - 36px)}
 .task-editor>form{max-height:calc(100dvh - 112px);overflow-y:auto}
 .task-status-field{min-width:0;margin:0;padding:0;border:0}

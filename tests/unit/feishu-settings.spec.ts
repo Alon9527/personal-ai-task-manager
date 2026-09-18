@@ -1,0 +1,50 @@
+import { mount } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+const service = vi.hoisted(() => ({ getFeishuStatus: vi.fn(), saveFeishuConfig: vi.fn(), testFeishuConnection: vi.fn(), inspectFeishuTable: vi.fn() }))
+vi.mock('../../app/services/feishu-api', () => service)
+import SuiteFeishuSettings from '../../app/components/suite/SuiteFeishuSettings.vue'
+const status = { configured: true, appId: 'cli_test', url: 'https://example.feishu.cn/base/ABC' }
+describe('Feishu settings consent boundaries', () => {
+  beforeEach(() => { vi.resetAllMocks(); service.getFeishuStatus.mockResolvedValue(status) })
+  it('only loads local status on mount; remote requests require explicit clicks', async () => {
+    service.testFeishuConnection.mockResolvedValue({ tables: [{ table_id: 'tbl123', name: '测试表' }], hasMore: false })
+    service.inspectFeishuTable.mockResolvedValue({ fields: ['文本'], recordsRead: 0, hasMore: false })
+    const wrapper = mount(SuiteFeishuSettings)
+    await flushPromises()
+    expect(service.testFeishuConnection).not.toHaveBeenCalled()
+    expect(service.inspectFeishuTable).not.toHaveBeenCalled()
+    await wrapper.findAll('button').find(b => b.text() === '测试连接并获取数据表')!.trigger('click')
+    await flushPromises()
+    expect(service.testFeishuConnection).toHaveBeenCalledTimes(1)
+    expect(service.inspectFeishuTable).not.toHaveBeenCalled()
+    await wrapper.findAll('button').find(b => b.text() === '读取字段及前 5 条记录')!.trigger('click')
+    await flushPromises()
+    expect(service.inspectFeishuTable).toHaveBeenCalledWith('tbl123')
+    expect(wrapper.text()).toContain('本次读取 0 条记录')
+    wrapper.unmount()
+  })
+  it('blocks remote testing of unsaved edits and clears secret after save', async () => {
+    service.saveFeishuConfig.mockResolvedValue(status)
+    const wrapper = mount(SuiteFeishuSettings)
+    await flushPromises()
+    await wrapper.get('input[type="password"]').setValue('synthetic-only')
+    expect(wrapper.findAll('button').find(b => b.text() === '测试连接并获取数据表')!.attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect((wrapper.get('input[type="password"]').element as HTMLInputElement).value).toBe('')
+    expect(service.testFeishuConnection).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('尚未进行线上连接测试')
+    wrapper.unmount()
+  })
+  it('shows sanitized native errors and never shows a success result on failure', async () => {
+    service.testFeishuConnection.mockRejectedValue('飞书拒绝请求（错误码 99991672）')
+    const wrapper = mount(SuiteFeishuSettings)
+    await flushPromises()
+    await wrapper.findAll('button').find(b => b.text() === '测试连接并获取数据表')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('99991672')
+    expect(wrapper.find('select').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

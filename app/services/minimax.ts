@@ -328,13 +328,15 @@ export async function askAi(
   context: MiniMaxWorkspaceContext,
   question: string,
   target: AiModelTarget,
+  images: string[] = [],
 ): Promise<MiniMaxAnswer> {
   if (!isMiniMaxDesktop()) throw new Error('AI 问答仅在 Windows 桌面版中可用')
   const normalized = clip(question.trim(), 1000)
   if (!normalized) throw new Error('请输入问题')
   const trustedTarget = aiModelTargetSchema.parse(target)
+  const checkedImages = z.array(z.string().max(7_000_000).regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/)).max(4).parse(images)
   const response = await invoke('ai_ask', {
-    request: { context, question: normalized, target: trustedTarget },
+    request: { context, question: normalized, target: trustedTarget, ...(checkedImages.length ? { images: checkedImages } : {}) },
   })
   return miniMaxAnswerSchema.parse(response)
 }

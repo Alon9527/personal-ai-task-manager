@@ -27,7 +27,7 @@ describe('Today functional interactions', () => {
   it('persists collapsed task groups in local storage', async () => {
     const wrapper = await mountSuspended(TodayPage)
     await vi.waitFor(() => expect(wrapper.findAll('[data-task-row]').length).toBeGreaterThan(0))
-    await wrapper.get('[aria-label="收起接下来"]').trigger('click')
+    await wrapper.get('[aria-label="收起今日重点"]').trigger('click')
 
     await vi.waitFor(() => {
       const saved = JSON.parse(localStorage.getItem('personal-ai-today-groups:v1') ?? '{}')

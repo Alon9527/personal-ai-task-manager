@@ -1,0 +1,30 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import SuiteHeader from '../components/suite/SuiteHeader.vue'
+import ModelProviderDialog from '../components/app/ModelProviderDialog.vue'
+import VoiceInputButton from '../components/workspace/VoiceInputButton.vue'
+import SuiteDataSettings from '../components/suite/SuiteDataSettings.vue'
+import SuiteFeishuSettings from '../components/suite/SuiteFeishuSettings.vue'
+import { UI_SCALE_OPTIONS } from '../composables/useUiPreferences'
+import { getMiniMaxStatus, saveMiniMaxApiKey, setMiniMaxRegion } from '../services/minimax'
+import type { MiniMaxStatus, MiniMaxRegion } from '../services/minimax'
+import { MINIMAX_MODELS } from '../services/minimax-model'
+import { loadAiModelTarget, saveAiModelTarget, DEFAULT_AI_MODEL_TARGET } from '../services/ai-model-target'
+import type { AiModelTarget } from '../services/ai-model-target'
+import { createFeishuLinkStore, openFeishuLink } from '../services/feishu-links'
+import type { FeishuLink } from '../services/feishu-links'
+const route=useRoute(); const router=useRouter(); const ui=useWorkspaceUi(); const preferences=useUiPreferences()
+const tabs=[{id:'appearance',label:'通用与外观',icon:'i-lucide-monitor'},{id:'models',label:'AI 模型',icon:'i-lucide-brain-circuit'},{id:'notifications',label:'通知与语音',icon:'i-lucide-bell'},{id:'feishu',label:'飞书连接',icon:'i-lucide-link'},{id:'data',label:'数据与备份',icon:'i-lucide-database'},{id:'updates',label:'软件更新',icon:'i-lucide-refresh-cw'}]
+const tab=computed(()=>tabs.some(t=>t.id===route.query.tab)?String(route.query.tab):'models')
+const status=ref<MiniMaxStatus|null>(null); const key=ref(''); const region=ref<MiniMaxRegion>('cn'); const target=ref<AiModelTarget>(DEFAULT_AI_MODEL_TARGET); const message=ref(''); const busy=ref(false); const transcript=ref(''); const links=ref<FeishuLink[]>([])
+onMounted(async()=>{target.value=loadAiModelTarget();links.value=createFeishuLinkStore(localStorage).list();try{status.value=await getMiniMaxStatus(); region.value=status.value.region??'cn'}catch(e){message.value=e instanceof Error?e.message:'读取配置失败'}})
+async function saveBuiltIn(){busy.value=true;message.value='';try{status.value=key.value.trim()?await saveMiniMaxApiKey(key.value.trim(),region.value):await setMiniMaxRegion(region.value); key.value=''; saveAiModelTarget(target.value);message.value='配置已保存'}catch(e){message.value=e instanceof Error?e.message:'保存失败'}finally{busy.value=false}}
+</script>
+<template><main class="suite-page"><SuiteHeader section="设置" /><div class="suite-content"><header class="suite-heading"><div><h1>设置</h1><p>个性化你的工作体验，让 FOCUS 更好地为你服务。</p></div></header><div class="suite-settings-layout"><nav class="suite-settings-nav"><NuxtLink v-for="item in tabs" :key="item.id" :to="`/settings?tab=${item.id}`" :class="{active:tab===item.id}"><UIcon :name="item.icon" />{{item.label}}</NuxtLink></nav><div class="suite-settings-main">
+<template v-if="tab==='models'"><section class="suite-card"><header><div><h2>AI 模型</h2><p>配置你偏好的模型，用于任务整理、计划建议与内容创作。</p></div></header><div class="suite-provider-cards"><button class="active" @click="target={kind:'minimax',modelId:MINIMAX_MODELS[0]!.id}"><UIcon name="i-lucide-audio-lines" /><span><strong>MiniMax</strong><small>{{status?.configured?'已配置':'未配置'}}</small></span></button><a href="#custom-providers"><UIcon name="i-lucide-brain-circuit" /><span><strong>OpenAI 兼容</strong><small>支持多套 API 配置</small></span></a></div><form class="suite-settings-form" @submit.prevent="saveBuiltIn"><label>配置名称<input value="MiniMax" readonly></label><label>服务区域<select v-model="region"><option value="cn">中国大陆</option><option value="global">国际</option></select></label><label>API Key<input v-model="key" type="password" autocomplete="new-password" :placeholder="status?.configured?'已安全保存，输入以替换':'输入 API Key'"><small>密钥保存在 Windows 凭据管理器，不回显原文。</small></label><label>模型<select v-if="target.kind==='minimax'" v-model="target.modelId"><option v-for="model in MINIMAX_MODELS" :key="model.id" :value="model.id">{{model.label}}</option></select></label><footer><span role="status">{{message}}</span><button class="suite-primary" :disabled="busy||!status?.available">{{busy?'保存中…':'保存配置'}}</button></footer></form><p v-if="!status?.available" class="suite-hint">浏览器预览不能访问本机凭据，请在 Windows 软件中配置模型。</p></section><div id="custom-providers"><ModelProviderDialog :open="true" embedded /></div></template>
+<section v-else-if="tab==='appearance'" class="suite-card"><h2>通用与外观</h2><p>文字与界面大小：80% 最小、85% 更小、90% 小、95% 稍小、100% 默认。桌面端文字、图标和控件同步缩放，选择自动保存。</p><div class="suite-segments"><button v-for="scale in UI_SCALE_OPTIONS" :key="scale" type="button" :aria-pressed="preferences.scale.value===scale" :class="{active:preferences.scale.value===scale}" @click="preferences.setScale(scale)">{{Math.round(scale*100)}}%</button></div></section>
+<section v-else-if="tab==='notifications'" class="suite-card"><h2>通知与语音</h2><p>任务设置提醒时间后，桌面端会检查到期事项。提醒需要应用保持运行。</p><NuxtLink class="suite-secondary" to="/calendar">设置任务提醒</NuxtLink><hr><h3>试试语音录入</h3><div class="suite-voice-test"><textarea v-model="transcript" placeholder="识别结果会出现在这里，不会自动新建任务。" /><VoiceInputButton @transcript="text=>transcript=[transcript,text].filter(Boolean).join(' ')" /></div></section>
+<template v-else-if="tab==='feishu'"><SuiteFeishuSettings /><section class="suite-card"><header><h2>飞书连接</h2><button @click="ui.openFeishuLinks">管理链接</button></header><p>打开已保存的飞书文档和多维表格链接；当前不提供自动同步。</p><button v-for="link in links" :key="link.id" class="suite-setting-row" @click="openFeishuLink(link.url)"><UIcon name="i-lucide-external-link" /><strong>{{link.label}}</strong></button><p v-if="!links.length" class="suite-empty">还没有保存飞书链接</p></section></template>
+<SuiteDataSettings v-else :section="tab==='data'?'data':'updates'" />
+<nav class="suite-settings-links"><NuxtLink v-for="item in tabs.filter(t=>t.id!==tab)" :key="item.id" :to="`/settings?tab=${item.id}`"><UIcon :name="item.icon" /><strong>{{item.label}}</strong><UIcon name="i-lucide-chevron-right" /></NuxtLink></nav>
+</div></div></div></main></template>

@@ -9,6 +9,7 @@ use tauri::{
 
 mod credential_store;
 mod document_import;
+mod feishu;
 mod minimax;
 mod notifications;
 mod model_provider;
@@ -21,6 +22,10 @@ mod workspace_store;
 
 fn main() {
     tauri::Builder::default()
+        // Must run before plugins and stores initialize a second workspace.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -30,14 +35,14 @@ fn main() {
             let workspace_store = workspace_store::WorkspaceStore::initialize(app.handle())
                 .map_err(std::io::Error::other)?;
             app.manage(workspace_store);
-            let open = MenuItem::with_id(app, "open", "打开 Focus AI", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "打开 Focus 个人任务管理器", true, None::<&str>)?;
             let new_task = MenuItem::with_id(app, "new_task", "记录新任务", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &new_task, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("application icon missing").clone())
-                .tooltip("Focus AI 个人任务管理器")
+                .tooltip("Focus 个人任务管理器")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -72,6 +77,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             document_import::parse_office_document,
+            feishu::feishu_get_status,
+            feishu::feishu_save_config,
+            feishu::feishu_test_connection,
+            feishu::feishu_inspect_table,
             document_import::open_external_url,
             minimax::minimax_get_status,
             minimax::minimax_save_api_key,
@@ -81,6 +90,7 @@ fn main() {
             minimax::minimax_ask,
             minimax::ai_generate_brief,
             minimax::ai_ask,
+            minimax::ai_suggest_quarter_goals,
             model_provider::model_provider_list,
             model_provider::model_provider_create,
             model_provider::model_provider_update,

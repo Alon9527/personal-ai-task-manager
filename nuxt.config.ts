@@ -3,9 +3,10 @@ const isDesktop = process.env.NUXT_DESKTOP === 'true' || Boolean(process.env.TAU
 export default defineNuxtConfig({
   compatibilityDate: '2026-07-21',
   ssr: !isDesktop,
-  css: ['~/assets/css/main.css'],
+  css: ['~/assets/css/main.css', '~/assets/css/focus-refinement.css', '~/assets/css/focus-desktop.css', '~/assets/css/reference-suite.css'],
   devtools: { enabled: !isDesktop },
   telemetry: false,
+  app: { head: { title: 'Focus 个人任务管理器' } },
   devServer: {
     port: 3000,
   },

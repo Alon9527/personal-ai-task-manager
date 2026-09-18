@@ -22,6 +22,7 @@ type ProviderForm = {
 const props = withDefaults(defineProps<{
   open: boolean
   selectedProfileId?: string | null
+  embedded?: boolean
 }>(), { selectedProfileId: null })
 
 const emit = defineEmits<{
@@ -54,6 +55,7 @@ let activeOpenSession = 0
 const isBusy = computed(() => loading.value || mutationPending.value || testing.value)
 
 watch(() => props.open, open => {
+  if (!import.meta.client) return
   if (!open) {
     closeOpenSession()
     return
@@ -383,6 +385,7 @@ function beginRekey(id: string) {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (props.embedded) return
   if (event.key === 'Escape') {
     event.preventDefault()
     requestClose()
@@ -413,15 +416,15 @@ function message(error: unknown, fallback: string) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="open" class="model-provider-dialog" @mousedown.self="requestClose">
-      <section ref="dialog" class="model-provider-dialog__panel" role="dialog" aria-modal="true" aria-labelledby="model-provider-title" @keydown="onKeydown">
+  <Teleport to="body" :disabled="embedded">
+    <div v-if="open" class="model-provider-dialog" :class="{'suite-inline-models':embedded}" @mousedown.self="!embedded && requestClose()">
+      <section ref="dialog" class="model-provider-dialog__panel" :role="embedded ? 'region' : 'dialog'" :aria-modal="embedded ? undefined : true" aria-labelledby="model-provider-title" @keydown="onKeydown">
         <header class="model-provider-dialog__header">
           <div>
             <small>AI ENDPOINTS</small>
             <h2 id="model-provider-title">管理模型服务商</h2>
           </div>
-          <button type="button" data-provider-close aria-label="关闭服务商管理" :disabled="mutationPending" @click="requestClose">关闭</button>
+          <button v-if="!embedded" type="button" data-provider-close aria-label="关闭服务商管理" :disabled="mutationPending" @click="requestClose">关闭</button>
         </header>
 
         <div class="model-provider-dialog__scroll">

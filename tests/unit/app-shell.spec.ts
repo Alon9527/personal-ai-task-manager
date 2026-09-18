@@ -28,6 +28,6 @@ describe('Huly-style application shell', () => {
     expect(wrapper.get('[data-zone="rail"]').attributes('aria-label')).toBe('应用导航')
     expect(wrapper.get('[data-zone="sidebar"]').text()).toContain('Today')
     expect(wrapper.get('[data-zone="sidebar"]').text()).toContain('季度追踪')
-    expect(wrapper.get('[data-zone="context"]').text()).toContain('AI 今日简报')
+    expect(wrapper.get('[data-zone="context"]').text()).toContain('AI 计划助手')
   })
 })

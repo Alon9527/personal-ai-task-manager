@@ -6,6 +6,8 @@ import UpcomingMilestones from '../components/dashboard/UpcomingMilestones.vue'
 import ProjectProgressPanel from '../components/projects/ProjectProgressPanel.vue'
 import TaskActionsMenu from '../components/workspace/TaskActionsMenu.vue'
 import VoiceInputButton from '../components/workspace/VoiceInputButton.vue'
+import TodayOverview from '../components/dashboard/TodayOverview.vue'
+import SuiteToday from '../components/suite/SuiteToday.vue'
 import {
   deriveTodayLanes,
   filterAndSortTasks,
@@ -29,6 +31,7 @@ const priorityFilter = ref<TodayPriorityFilter>('all')
 const statusFilter = ref<TodayStatusFilter>('all')
 const sortMode = ref<TodaySort>('manual')
 const viewMode = ref<'list' | 'agenda'>('list')
+watch(() => route.query.view, value => { viewMode.value = value === 'agenda' ? 'agenda' : 'list' }, { immediate: true })
 type TodaySectionKey = 'next' | 'laterToday' | 'backlog' | 'completed'
 const collapsedGroups = ref<Record<TodaySectionKey, boolean>>({ next: false, laterToday: false, backlog: false, completed: false })
 
@@ -152,24 +155,25 @@ async function clearFilters() {
 </script>
 
 <template>
-  <main class="today-page">
+  <SuiteToday v-if="!route.query.project && !route.query.view" />
+  <main v-else class="today-page">
     <header class="today-topbar">
       <div class="breadcrumb">
-        <span>工作台</span><UIcon name="i-lucide-chevron-right" /><b>Today</b>
+        <span>工作空间</span><UIcon name="i-lucide-chevron-right" /><b>{{ viewMode === 'agenda' ? '任务与日程' : 'Today' }}</b>
         <span v-if="selectedProject"><UIcon name="i-lucide-chevron-right" />{{ selectedProject.name }}</span>
         <span data-backend-mode class="mode-badge"><span />{{ workspace.backendLabel.value }}</span>
       </div>
       <div class="topbar-actions">
-        <button aria-label="全局搜索" title="Ctrl+K" @click="ui.openSearch()"><UIcon name="i-lucide-search" /></button>
+        <button class="focus-search" aria-label="全局搜索" title="Ctrl+K" @click="ui.openSearch()"><UIcon name="i-lucide-search" /><span>搜索任务、项目或内容…</span><kbd>Ctrl K</kbd></button>
         <button :class="{ 'filter-active': activeFilterCount }" aria-label="筛选任务" @click="showFilters = !showFilters"><UIcon name="i-lucide-list-filter" /><b v-if="activeFilterCount">{{ activeFilterCount }}</b></button>
-        <button class="add-button" @click="ui.openNewTask(selectedProjectId)"><UIcon name="i-lucide-plus" />添加任务</button>
+        <button class="focus-profile" aria-label="本机工作区设置" @click="ui.openWorkspaceInfo">L</button>
       </div>
     </header>
 
     <div class="today-content">
       <section class="today-heading">
-        <div><p>{{ todayHeading }}</p><h1>{{ selectedProject ? selectedProject.name : 'Today' }}</h1><span>今天把重要的事向前推进一点。</span></div>
-        <button class="ai-refresh" @click="ui.requestMiniMaxBrief"><UIcon name="i-lucide-sparkles" />更新 AI 简报</button>
+        <div><div class="focus-heading-line"><h1>{{ selectedProject ? selectedProject.name : viewMode === 'agenda' ? '任务与日程' : 'Today' }}</h1><p>{{ todayHeading }}</p></div><span>{{ viewMode === 'agenda' ? '规划时间，从容完成每一件事。' : '先做好重要的事。' }}</span></div>
+        <button class="add-button focus-new-task" @click="ui.openNewTask(selectedProjectId)"><UIcon name="i-lucide-plus" />新建任务</button>
       </section>
 
       <ProjectProgressPanel
@@ -188,7 +192,7 @@ async function clearFilters() {
 
       <section class="metric-grid" aria-label="今日概览">
         <article><span class="metric-icon violet"><UIcon name="i-lucide-target" /></span><div><small>今日重点</small><strong>{{ visibleMetrics.focus }}</strong></div><em>保持专注</em></article>
-        <article><span class="metric-icon blue"><UIcon name="i-lucide-loader-circle" /></span><div><small>进行中</small><strong>{{ visibleMetrics.active }}</strong></div><em>当前视图</em></article>
+        <article><span class="metric-icon blue"><UIcon name="i-lucide-loader-circle" /></span><div><small>待推进</small><strong>{{ visibleMetrics.active }}</strong></div><em>当前视图</em></article>
         <article><span class="metric-icon green"><UIcon name="i-lucide-circle-check-big" /></span><div><small>已完成</small><strong>{{ visibleMetrics.completed }}</strong></div><em class="positive">当前视图</em></article>
         <article class="quarter-card"><div><small>{{ currentQuarter.replace('-', ' ') }} 季度进度</small><strong>{{ quarterMetrics.averageProgress }}%</strong></div><div class="progress-track"><span :style="{ width: `${quarterMetrics.averageProgress}%` }" /></div><em>剩余 {{ quarterMetrics.remainingDays }} 天</em></article>
       </section>
@@ -199,6 +203,7 @@ async function clearFilters() {
             <button :class="{ active: viewMode === 'list' }" @click="viewMode = 'list'"><UIcon name="i-lucide-list" />列表</button>
             <button :class="{ active: viewMode === 'agenda' }" @click="viewMode = 'agenda'"><UIcon name="i-lucide-calendar-days" />日程</button>
           </div>
+          <button class="focus-brief-refresh" @click="ui.requestMiniMaxBrief"><UIcon name="i-lucide-sparkles" />更新 AI 简报</button>
           <label class="sort-control"><UIcon name="i-lucide-arrow-up-down" /><select v-model="sortMode" aria-label="任务排序"><option value="manual">手动排序</option><option value="due">按截止时间</option><option value="priority">按优先级</option><option value="title">按标题</option></select></label>
         </div>
 
@@ -230,6 +235,7 @@ async function clearFilters() {
                 <article v-for="(task, index) in group.tasks" :key="task.id" data-task-row class="task-row">
                   <button class="task-check" :class="{ checked: task.completedAt !== null }" :aria-label="`${task.completedAt ? '恢复' : '完成'} ${task.title}`" @click="workspace.setTaskCompleted(task.id, task.completedAt === null)"><UIcon v-if="task.completedAt" name="i-lucide-check" /></button>
                   <button class="task-main task-open" @click="ui.openEditTask(task.id)"><span :class="{ completed: task.completedAt !== null }">{{ task.title }}</span><span class="task-meta"><i class="mini-dot" :style="{ background: projectFor(task)?.color ?? '#9297a1' }" />{{ projectFor(task)?.name ?? '无项目' }}</span></button>
+                  <span class="task-status-pill" :class="getTaskStatus(task)">{{ statusLabel(task) }}</span>
                   <span v-if="task.priority" class="priority" :class="task.priority">{{ priorityLabel(task.priority) }}</span>
                   <span v-if="task.dueTime" class="task-time"><UIcon name="i-lucide-clock-3" />{{ task.dueTime }}</span>
                   <div class="task-menu-wrap">
@@ -273,6 +279,7 @@ async function clearFilters() {
           <div v-if="!agendaGroups.length" class="empty-state"><span>没有符合当前筛选条件的日程</span><button @click="clearFilters">清除筛选</button></div>
         </section>
       </section>
+      <TodayOverview v-if="!selectedProject && viewMode === 'list' && activeFilterCount === 0" :today="todayDate" />
     </div>
   </main>
 </template>

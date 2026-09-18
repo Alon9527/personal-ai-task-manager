@@ -14,7 +14,7 @@ export type CreateTaskInput = Pick<
   Task,
   'title' | 'description' | 'projectId' | 'milestoneId' | 'priority' | 'dueDate' | 'dueTime' | 'isFocus'
 > & Partial<Pick<Task, 'status' | 'importance' | 'estimatedMinutes' | 'reminderAt' | 'snoozedUntil' | 'lastRemindedAt'>>
-  & Partial<Pick<Task, 'attachments'>>
+  & Partial<Pick<Task, 'attachments' | 'startDate' | 'completionDate'>>
 export type UpdateTaskInput = Partial<CreateTaskInput>
 export type CreateQuarterGoalInput = Pick<
   QuarterGoal,

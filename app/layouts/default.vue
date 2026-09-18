@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import WorkspaceOverlays from '../components/workspace/WorkspaceOverlays.vue'
+import SuiteAiPanel from '../components/suite/SuiteAiPanel.vue'
 
 const route = useRoute()
 const ui = useWorkspaceUi()
 const uiPreferences = useUiPreferences()
 const isAgentPlan = computed(() => route.path === '/agent-plan')
+const suiteWide = computed(() => ['/calendar','/project','/settings'].includes(route.path))
+const suiteAi = computed(() => (route.path === '/' && !route.query.project && !route.query.view) || route.path === '/inbox')
 useTaskReminders()
 
 onMounted(() => {
@@ -43,11 +46,11 @@ function handleShortcut(event: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'agent-review-mode': isAgentPlan }">
+  <div class="app-shell suite-shell" :class="{ 'agent-review-mode': isAgentPlan, 'suite-wide': suiteWide }">
     <aside data-zone="rail" class="app-rail" aria-label="应用导航"><AppRail /></aside>
     <aside data-zone="sidebar" class="project-sidebar"><AppProjectSidebar /></aside>
     <section data-zone="content" class="content-canvas"><slot /></section>
-    <aside v-if="!isAgentPlan" data-zone="context" class="context-panel"><AppContextPanel /></aside>
+    <aside v-if="!isAgentPlan && !suiteWide" data-zone="context" class="context-panel"><SuiteAiPanel v-if="suiteAi" /><AppContextPanel v-else /></aside>
   </div>
   <WorkspaceOverlays />
 </template>

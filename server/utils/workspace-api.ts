@@ -19,6 +19,8 @@ const taskFields = {
   milestoneId: z.string().uuid().nullable(),
   priority: z.enum(['low', 'medium', 'high']).nullable(),
   dueDate: z.iso.date().nullable(),
+  startDate: z.iso.date().nullable().optional(),
+  completionDate: z.iso.date().nullable().optional(),
   dueTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(),
   isFocus: z.boolean(),
   status: taskStatusSchema.optional(),

@@ -23,7 +23,8 @@ export async function addTaskAttachments(
   files: TaskAttachmentFile[],
   createId: () => string = () => crypto.randomUUID(),
 ): Promise<TaskAttachment[]> {
-  const current = taskAttachmentSchema.array().max(MAX_TASK_ATTACHMENTS).parse(structuredClone(existing))
+  // Zod returns detached plain data; structuredClone cannot clone Vue proxies.
+  const current = taskAttachmentSchema.array().max(MAX_TASK_ATTACHMENTS).parse(existing)
   if (current.length + files.length > MAX_TASK_ATTACHMENTS) {
     throw new Error(`每个任务最多添加 ${MAX_TASK_ATTACHMENTS} 个附件`)
   }

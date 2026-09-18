@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { enableAutoUnmount } from '@vue/test-utils'
+enableAutoUnmount(afterEach)
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createDemoWorkspace } from '../../app/data/demo-workspace'

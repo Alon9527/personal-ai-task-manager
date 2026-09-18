@@ -2,9 +2,13 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const nuxtCli = fileURLToPath(new URL('../node_modules/nuxt/bin/nuxt.mjs', import.meta.url))
+// Signing belongs to the parent Tauri process, never the frontend bundler.
+const frontendEnv = { ...process.env }
+delete frontendEnv.TAURI_SIGNING_PRIVATE_KEY
+delete frontendEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 const child = spawn(process.execPath, [nuxtCli, 'generate'], {
   env: {
-    ...process.env,
+    ...frontendEnv,
     NUXT_DESKTOP: 'true',
   },
   stdio: 'inherit',

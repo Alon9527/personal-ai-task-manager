@@ -7,6 +7,7 @@ import { getCurrentQuarter } from '../../utils/today-view'
 const workspace = useWorkspace()
 const ui = useWorkspaceUi()
 const route = useRoute()
+const modelManagerOpen = useState<boolean>('model-manager-open', () => false)
 const currentQuarter = getCurrentQuarter(new Date())
 const selectedProjectId = computed(() => typeof route.query.project === 'string' ? route.query.project : null)
 const openMenuId = ref<string | null>(null)
@@ -34,11 +35,13 @@ async function moveProject(projectId: string, direction: -1 | 1) {
 <template>
   <div class="sidebar-inner">
     <header class="workspace-switcher">
-      <div><span class="eyebrow">WORKSPACE</span><strong>我的工作台</strong></div>
+      <div><span class="eyebrow">FOCUS</span><strong>我的工作空间</strong><small class="workspace-tagline">专注创造更好的成果</small></div>
       <button aria-label="查看本机工作区信息" @click="ui.openWorkspaceInfo"><UIcon name="i-lucide-info" /></button>
     </header>
     <nav class="sidebar-nav" aria-label="工作区导航">
-      <NuxtLink to="/" class="sidebar-link"><UIcon name="i-lucide-sun" /><span>Today</span><kbd>G T</kbd></NuxtLink>
+      <NuxtLink to="/" class="sidebar-link" :class="{ 'nav-muted': !!route.query.view || !!selectedProjectId }"><UIcon name="i-lucide-sun" /><span>Today</span><kbd>G T</kbd></NuxtLink>
+      <NuxtLink to="/calendar" class="sidebar-link"><UIcon name="i-lucide-calendar-days" /><span>任务与日程</span></NuxtLink>
+      <div v-if="route.path==='/calendar'" class="suite-subnav"><NuxtLink to="/calendar" :class="{chosen:!route.query.filter}">日历</NuxtLink><NuxtLink to="/calendar?filter=today" :class="{chosen:route.query.filter==='today'}">今天</NuxtLink><NuxtLink to="/calendar?filter=week" :class="{chosen:route.query.filter==='week'}">未来七天</NuxtLink><NuxtLink to="/calendar?filter=done" :class="{chosen:route.query.filter==='done'}">已完成</NuxtLink></div>
       <NuxtLink to="/inbox" class="sidebar-link"><UIcon name="i-lucide-inbox" /><span>收集箱</span><b data-inbox-count>{{ inbox ? workspace.projectCounts.value[inbox.id] ?? 0 : 0 }}</b></NuxtLink>
       <NuxtLink to="/quarter" class="sidebar-link"><UIcon name="i-lucide-goal" /><span>季度追踪</span><em data-quarter-progress>{{ quarterProgress }}%</em></NuxtLink>
       <NuxtLink to="/review" class="sidebar-link"><UIcon name="i-lucide-panels-top-left" /><span>年终总结</span></NuxtLink>
@@ -47,7 +50,7 @@ async function moveProject(projectId: string, direction: -1 | 1) {
     <section class="project-section">
       <div class="section-heading"><span>项目</span><button data-new-project aria-label="新建项目" @click="ui.openNewProject"><UIcon name="i-lucide-plus" /></button></div>
       <div v-for="(project, index) in visibleProjects" :key="project.id" data-project-row class="project-row">
-        <NuxtLink :to="{ path: '/', query: { project: project.id } }" class="project-link" :class="{ active: selectedProjectId === project.id }">
+        <NuxtLink :to="{ path: '/project', query: { project: project.id } }" class="project-link" :class="{ active: selectedProjectId === project.id }">
           <span class="project-dot" :style="{ background: project.color }" />
           <span>{{ project.name }}</span>
           <small>{{ workspace.projectCounts.value[project.id] ?? 0 }}</small>
@@ -69,6 +72,13 @@ async function moveProject(projectId: string, direction: -1 | 1) {
       <button type="button" @click="ui.openDataImport"><UIcon name="i-lucide-file-input" />导入资料</button>
       <button type="button" @click="ui.openFeishuLinks"><UIcon name="i-lucide-external-link" />飞书</button>
     </div>
+    <NuxtLink to="/settings" class="sidebar-link suite-settings-entry"><UIcon name="i-lucide-settings" />设置</NuxtLink>
+    <details class="sidebar-settings suite-legacy-settings">
+      <summary><UIcon name="i-lucide-settings" />设置</summary>
+      <button type="button" @click="modelManagerOpen = true"><UIcon name="i-lucide-brain-circuit" />AI 模型配置</button>
+      <button type="button" @click="ui.openWorkspaceInfo"><UIcon name="i-lucide-monitor" />外观、数据与更新</button>
+      <button type="button" @click="ui.openFeishuLinks"><UIcon name="i-lucide-link" />飞书连接</button>
+    </details>
     <button class="sidebar-create" @click="ui.openNewTask()"><UIcon name="i-lucide-plus" />新建任务<kbd>C</kbd></button>
   </div>
 </template>

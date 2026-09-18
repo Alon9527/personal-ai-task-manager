@@ -164,6 +164,7 @@ describe('milestone overlay wiring', () => {
     const updateMilestone = vi.fn().mockResolvedValue(undefined)
     const deleteMilestone = vi.fn().mockResolvedValue(undefined)
     const workspace = {
+      backendMode: ref('local'),
       tasks: ref([{ id: '30000000-0000-4000-8000-000000000001', projectId: PROJECT_ID, milestoneId: MILESTONE_ID, title: '关联任务' }]),
       projects: ref([{ id: PROJECT_ID, name: '官网改版' }]),
       milestones: ref([milestone]),

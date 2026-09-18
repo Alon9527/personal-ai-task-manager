@@ -48,13 +48,13 @@ describe('desktop application configuration', () => {
 
     const cargoConfig = await readFile('src-tauri/.cargo/config.toml', 'utf8')
     expect(config.identifier).toBe('com.focusai.taskmanager')
-    expect(config.version).toBe('0.2.1')
-    expect(cargo).toContain('version = "0.2.1"')
+    expect(config.version).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(cargo).toContain(`version = "${config.version}"`)
     expect(config.build?.beforeBuildCommand).toBe('pnpm generate:desktop')
     expect(config.build?.frontendDist).toBe('../.output/public')
     expect(config.app?.windows?.[0]).toMatchObject({
       label: 'main',
-      title: 'Focus AI 个人任务管理器',
+      title: 'Focus 个人任务管理器',
       width: 1440,
       height: 900,
       minWidth: 1024,

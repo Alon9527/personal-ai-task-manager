@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { reactive } from 'vue'
 import { createDemoWorkspace } from '../../app/data/demo-workspace'
 import {
   MAX_TASK_ATTACHMENT_BYTES,
@@ -18,6 +19,12 @@ function file(name: string, type: string, bytes: number[]) {
 }
 
 describe('task attachments', () => {
+  it('accepts Vue reactive attachment arrays without DataCloneError', async () => {
+    const existing = reactive(await addTaskAttachments([], [file('已有.png', 'image/png', [1])]))
+    const result = await addTaskAttachments(existing, [file('新图.png', 'image/png', [2])])
+    expect(result).toHaveLength(2)
+    expect(existing).toHaveLength(1)
+  })
   it('encodes local files into portable task data and recognizes safe image previews', async () => {
     const attachments = await addTaskAttachments(
       [],

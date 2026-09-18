@@ -15,11 +15,12 @@ describe('real application navigation', () => {
 
     expect(wrapper.find('a[href="/"]').exists()).toBe(true)
     expect(wrapper.find('a[href="/inbox"]').exists()).toBe(true)
-    expect(wrapper.find('a[href="/quarter"]').exists()).toBe(true)
-    expect(wrapper.find('a[href="/review"]').exists()).toBe(true)
+    expect(wrapper.find('a[href="/calendar"]').exists()).toBe(true)
+    expect(wrapper.find('a[href="/project"]').exists()).toBe(true)
+    expect(wrapper.find('a[href="/settings"]').exists()).toBe(true)
 
     const icons = wrapper.findAll('svg.rail-icon')
-    expect(icons).toHaveLength(5)
+    expect(icons).toHaveLength(6)
     for (const icon of icons) {
       expect(icon.attributes('viewBox')).toBe('0 0 24 24')
       expect(icon.find('path, circle, rect').exists()).toBe(true)
@@ -33,6 +34,7 @@ describe('real application navigation', () => {
     )
 
     const quarterLink = wrapper.get('a[href="/quarter"]')
+    expect(wrapper.find('a[href="/review"]').exists()).toBe(true)
     expect(quarterLink.classes()).not.toContain('active')
     expect(wrapper.find('.sidebar-link.active').exists()).toBe(false)
   })

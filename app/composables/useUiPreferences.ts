@@ -2,7 +2,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { computed } from 'vue'
 
 export const UI_SCALE_STORAGE_KEY = 'personal-ai-ui-scale:v4'
-export const UI_SCALE_OPTIONS = [1, 1.05, 1.1] as const
+export const UI_SCALE_OPTIONS = [0.8, 0.85, 0.9, 0.95, 1, 1.05, 1.1] as const
 export const DEFAULT_UI_SCALE: UiScale = 1
 export type UiScale = typeof UI_SCALE_OPTIONS[number]
 

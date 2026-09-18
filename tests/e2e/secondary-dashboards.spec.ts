@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
 
 test('inbox task CRUD persists and soft deletion stays recoverable', async ({ page }) => {
   await gotoHydrated(page, '/inbox')
-  await page.locator('.dashboard-primary-action').click()
+  await page.getByRole('button', { name: '详细新建', exact: true }).click()
   await page.getByLabel('任务标题').fill('收集箱验收任务')
   await page.getByRole('button', { name: '创建任务', exact: true }).click()
   await expect(page.getByText('收集箱验收任务', { exact: true })).toBeVisible()
@@ -163,7 +163,7 @@ test('AI panel remains visible at readable desktop widths', async ({ page }, tes
   await page.setViewportSize({ width: 1030, height: 900 })
   await gotoHydrated(page, '/')
   await expect(page.locator('[data-zone="context"]')).toBeVisible()
-  await expect(page.locator('[data-minimax-panel]')).toBeVisible()
+  await expect(page.locator('.suite-ai')).toBeVisible()
   await expectNoHorizontalOverflow(page)
 
   await page.setViewportSize({ width: 820, height: 900 })

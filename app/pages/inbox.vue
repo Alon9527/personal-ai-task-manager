@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import SuiteHeader from '../components/suite/SuiteHeader.vue'
+import VoiceInputButton from '../components/workspace/VoiceInputButton.vue'
 import type { Task, TaskGroup } from '#shared/workspace'
 import DashboardTopbar from '../components/dashboard/DashboardTopbar.vue'
 import EmptyDashboardState from '../components/dashboard/EmptyDashboardState.vue'
@@ -17,6 +19,13 @@ const statusFilter = ref<StatusFilter>('all')
 const priorityFilter = ref<PriorityFilter>('all')
 const openMenuId = ref<string | null>(null)
 const selectedTaskIds = ref<string[]>([])
+const aiSelectedIds = useState<string[]>('suite-inbox-selection',()=>[])
+watch(selectedTaskIds, ids=>{aiSelectedIds.value=[...ids]}, {deep:true})
+onBeforeUnmount(()=>{aiSelectedIds.value=[]})
+const capture = ref('')
+const capturing = ref(false)
+const captureError = ref('')
+async function captureTask(){if(!capture.value.trim()||capturing.value)return;capturing.value=true;captureError.value='';try{await workspace.createTask({title:capture.value.trim(),description:'',projectId:inboxProject.value?.id??null,priority:null,dueDate:null,dueTime:null,isFocus:false,status:'inbox',importance:'normal',estimatedMinutes:null,reminderAt:null,milestoneId:null});capture.value=''}catch(e){captureError.value=e instanceof Error?e.message:'记录失败'}finally{capturing.value=false}}
 const bulkDeleteOpen = ref(false)
 const bulkDeleting = ref(false)
 const bulkDeleteError = ref('')
@@ -179,7 +188,8 @@ async function moveWithinGroup(task: Task, direction: -1 | 1) {
 </script>
 
 <template>
-  <main class="dashboard-page inbox-page">
+  <main class="dashboard-page inbox-page suite-inbox">
+    <SuiteHeader section="收集箱" />
     <DashboardTopbar
       section="工作台"
       title="收集箱"
@@ -196,6 +206,7 @@ async function moveWithinGroup(task: Task, direction: -1 | 1) {
         </div>
       </section>
 
+      <section class="suite-capture"><form @submit.prevent="captureTask"><input v-model="capture" aria-label="快速记录收集箱" placeholder="快速记录，例如：下周跟进供应商报价" maxlength="160"><VoiceInputButton @transcript="text=>capture=[capture,text].filter(Boolean).join(' ')" /><button :disabled="capturing||!capture.trim()" aria-label="保存记录"><UIcon name="i-lucide-arrow-up" /></button></form><div><button @click="ui.openDataImport"><UIcon name="i-lucide-file-text" />导入 Word</button><button @click="ui.openDataImport"><UIcon name="i-lucide-table" />导入 Excel</button><button @click="ui.openNewTask(inboxProject?.id??null)">详细新建</button></div><p v-if="captureError" role="alert">{{captureError}}</p></section>
       <section class="dashboard-metric-grid" aria-label="收集箱概览">
         <MetricCard
           data-metric="unorganized"
@@ -296,7 +307,7 @@ async function moveWithinGroup(task: Task, direction: -1 | 1) {
               <UIcon v-if="task.completedAt" name="i-lucide-check" />
             </button>
             <div class="inbox-task-main">
-              <strong :class="{ completed: task.completedAt !== null }">{{ task.title }}</strong>
+              <button class="suite-inbox-title" @click="ui.openEditTask(task.id)"><strong :class="{ completed: task.completedAt !== null }">{{ task.title }}</strong></button>
               <span>
                 <i :style="{ background: projectFor(task)?.color ?? '#9297a1' }" />
                 {{ projectFor(task)?.name ?? '无项目' }}

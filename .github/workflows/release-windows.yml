@@ -42,6 +42,17 @@ jobs:
       - name: Type check
         run: pnpm typecheck
 
+      - name: Unit regression gate
+        run: pnpm test
+
+      - name: Desktop regression gate
+        # Tauri embeds these assets while compiling the test binary.
+        # Generate first on a clean runner as well as during packaging.
+        run: |
+          pnpm generate:desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path src-tauri/Cargo.toml --locked -j 1
+
       - name: Build and publish signed Windows release
         uses: tauri-apps/tauri-action@944946e3e4cac6603d1fe8f514171e9ecd3c78aa # v1
         env:
@@ -50,11 +61,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
-          releaseName: Focus AI v__VERSION__
+          releaseName: Focus 个人任务管理器 v__VERSION__
           releaseBody: |
-            Focus AI 个人任务管理器 Windows 更新。
-            安装后可在“我的工作台 → 软件更新”中检查后续版本。
-          releaseDraft: false
+            Focus 个人任务管理器 Windows 更新。
+            在“设置 → 软件更新”（旧版为“我的工作台 → 软件更新”）中检查并安装。
+            更新保留本机数据及模型配置。真实模型与飞书调用需使用自己的配置验收。
+          # Publish only after the updater manifest and signed artifacts have been verified.
+          releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true

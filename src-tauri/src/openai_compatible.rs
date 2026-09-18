@@ -168,6 +168,7 @@ impl Drop for OwnedCredential {
 }
 
 struct GuardedChatCompletionRequest<'a> {
+    images: &'a [String],
     base_url: &'a str,
     exact_endpoint: bool,
     credential: Option<OwnedCredential>,
@@ -194,6 +195,7 @@ impl<'a> GuardedChatCompletionRequest<'a> {
         Self {
             base_url,
             exact_endpoint: false,
+            images: &[],
             credential: api_key.map(OwnedCredential::new),
             model,
             system,
@@ -229,6 +231,7 @@ impl<'a> GuardedChatCompletionRequest<'a> {
             base_url,
             exact_endpoint: false,
             credential: api_key.map(|value| OwnedCredential::with_observer(value, observer)),
+            images: &[],
             model,
             system,
             user,
@@ -242,7 +245,36 @@ impl<'a> GuardedChatCompletionRequest<'a> {
 #[derive(Serialize)]
 struct WireMessage<'a> {
     role: &'static str,
-    content: &'a str,
+    content: WireContent<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WireContent<'a> { Text(&'a str), Parts(Vec<serde_json::Value>) }
+
+fn user_content<'a>(text: &'a str, images: &[String]) -> WireContent<'a> {
+    if images.is_empty() { return WireContent::Text(text); }
+    let mut parts = vec![serde_json::json!({"type":"text","text":text})];
+    parts.extend(images.iter().map(|url| serde_json::json!({"type":"image_url","image_url":{"url":url}})));
+    WireContent::Parts(parts)
+}
+
+#[cfg(test)]
+mod image_wire_tests {
+    use super::*;
+    #[test]
+    fn serializes_images_as_parts_but_keeps_text_only_requests_unchanged() {
+        assert_eq!(serde_json::to_value(user_content("hello", &[])).unwrap(), serde_json::json!("hello"));
+        let value = serde_json::to_value(user_content("analyze", &["data:image/png;base64,AAAA".into()])).unwrap();
+        assert_eq!(value[0]["text"], "analyze");
+        assert_eq!(value[1]["image_url"]["url"], "data:image/png;base64,AAAA");
+    }
+}
+
+pub async fn chat_completion_with_images(request: ChatCompletionRequest<'_>, images: &[String]) -> Result<ChatCompletion, TransportError> {
+    let mut guarded = GuardedChatCompletionRequest::new(request);
+    guarded.images = images;
+    chat_completion_guarded(guarded, TransportTimeouts { connect: CONNECT_TIMEOUT, overall: OVERALL_TIMEOUT }, None).await
 }
 
 #[derive(Serialize)]
@@ -389,12 +421,12 @@ async fn chat_completion_guarded(
     if let Some(system) = request.system {
         messages.push(WireMessage {
             role: "system",
-            content: system,
+            content: WireContent::Text(system),
         });
     }
     messages.push(WireMessage {
         role: "user",
-        content: request.user,
+        content: user_content(request.user, request.images),
     });
     let payload = CompletionPayload {
         model: request.model,
@@ -428,7 +460,7 @@ pub fn test_connection<'a>(
             model,
             messages: [WireMessage {
                 role: "user",
-                content: "Reply with OK.",
+                content: WireContent::Text("Reply with OK."),
             }],
             stream: false,
             max_tokens: 8,

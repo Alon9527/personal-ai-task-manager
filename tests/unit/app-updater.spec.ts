@@ -34,4 +34,29 @@ describe('desktop updater', () => {
     await expect(checkDesktopUpdate()).resolves.toMatchObject({ status: 'unavailable' })
     expect(check).not.toHaveBeenCalled()
   })
+
+  it('downloads and installs through the signed updater while reporting progress', async () => {
+    const downloadAndInstall = vi.fn(async (notify) => {
+      notify({ event: 'Started', data: { contentLength: 100 } })
+      notify({ event: 'Progress', data: { chunkLength: 40 } })
+      notify({ event: 'Progress', data: { chunkLength: 60 } })
+      notify({ event: 'Finished' })
+    })
+    check.mockResolvedValue({ version: '0.3.6', downloadAndInstall })
+    const { checkDesktopUpdate } = await import('../../app/services/app-updater')
+    const result = await checkDesktopUpdate()
+    if (result.status !== 'available') throw new Error('Expected available update')
+    const progress = vi.fn()
+    await result.install(progress)
+    expect(downloadAndInstall).toHaveBeenCalledOnce()
+    expect(progress).toHaveBeenLastCalledWith({ downloaded: 100, total: 100 })
+  })
+
+  it('surfaces installation and signature errors without a fallback installer', async () => {
+    check.mockResolvedValue({ version: '0.3.6', downloadAndInstall: vi.fn().mockRejectedValue(new Error('signature verification failed')) })
+    const { checkDesktopUpdate } = await import('../../app/services/app-updater')
+    const result = await checkDesktopUpdate()
+    if (result.status !== 'available') throw new Error('Expected available update')
+    await expect(result.install(vi.fn())).rejects.toThrow('signature verification failed')
+  })
 })

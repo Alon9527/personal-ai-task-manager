@@ -5,6 +5,7 @@ import { UI_SCALE_OPTIONS } from '../../composables/useUiPreferences'
 import { checkDesktopUpdate, currentAppVersion } from '../../services/app-updater'
 import type { DesktopUpdateCheck } from '../../services/app-updater'
 import ClearWorkspaceDataDialog from './ClearWorkspaceDataDialog.vue'
+defineProps<{ embedded?: boolean, section?: 'data'|'updates' }>()
 const workspace = useWorkspace()
 const ui = useWorkspaceUi()
 const preferences = useUiPreferences()
@@ -36,6 +37,7 @@ onMounted(async () => {
 async function checkUpdate() {
   checkingUpdate.value = true
   updateError.value = null
+  updateResult.value = null
   try {
     updateResult.value = await checkDesktopUpdate()
     appVersion.value = updateResult.value.currentVersion
@@ -52,6 +54,7 @@ async function installUpdate() {
   if (!availableUpdate.value || installingUpdate.value) return
   installingUpdate.value = true
   updateError.value = null
+  updateProgress.value = { downloaded: 0, total: null }
   try {
     await availableUpdate.value.install(progress => {
       updateProgress.value = progress
@@ -85,12 +88,12 @@ async function clearWorkspaceData() {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="ui.workspaceInfoOpen.value" class="dialog-backdrop" @mousedown.self="ui.closeWorkspaceInfo">
-      <section class="workspace-dialog workspace-info-dialog" role="dialog" aria-modal="true" aria-label="本机工作区信息">
+  <Teleport to="body" :disabled="embedded">
+    <div v-if="embedded || ui.workspaceInfoOpen.value" :class="embedded ? 'suite-inline-info' : 'dialog-backdrop'" :data-section="section" @mousedown.self="!embedded && ui.closeWorkspaceInfo()">
+      <section class="workspace-dialog workspace-info-dialog" :role="embedded ? 'region' : 'dialog'" :aria-modal="embedded ? undefined : true" aria-label="本机工作区信息">
         <header class="dialog-header">
           <div><small>LOCAL WORKSPACE</small><h2>我的工作台</h2></div>
-          <button aria-label="关闭" @click="ui.closeWorkspaceInfo"><UIcon name="i-lucide-x" /></button>
+          <button v-if="!embedded" aria-label="关闭" @click="ui.closeWorkspaceInfo"><UIcon name="i-lucide-x" /></button>
         </header>
         <div class="workspace-info-body">
           <div class="local-mode-card">
@@ -108,12 +111,13 @@ async function clearWorkspaceData() {
           </div>
           <p><UIcon name="i-lucide-shield-check" />当前没有登录和云端同步。删除的任务、项目和目标会进入回收站，可随时恢复。</p>
           <section class="readability-card" aria-label="界面大小">
-            <div><b>界面大小</b><small>当前已采用大字号，可在安全范围内细调界面</small></div>
+            <div><b>文字与界面大小</b><small>80% 最小 · 85% 更小 · 90% 小 · 100% 默认；桌面端立即生效并自动保存</small></div>
             <div class="scale-options">
               <button
                 v-for="option in UI_SCALE_OPTIONS"
                 :key="option"
                 type="button"
+                :aria-pressed="preferences.scale.value === option"
                 :class="{ active: preferences.scale.value === option }"
                 @click="preferences.setScale(option)"
               >
@@ -141,7 +145,7 @@ async function clearWorkspaceData() {
             <button v-else type="button" class="update-button" :disabled="checkingUpdate" @click="checkUpdate">
               {{ checkingUpdate ? '检查中…' : '检查更新' }}
             </button>
-            <small class="update-note">仅手动检查；安装包必须通过应用签名验证。Windows 安装时软件会关闭。</small>
+            <small class="update-note">从 GitHub 下载更新并验证签名，无需手动下载安装包。请先保存正在编辑的内容；安装时软件会关闭，已保存的任务和配置会保留。</small>
           </section>
           <section class="danger-zone" aria-label="危险操作">
             <div>

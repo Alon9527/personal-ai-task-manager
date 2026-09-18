@@ -11,6 +11,7 @@ import EmptyDashboardState from '../components/dashboard/EmptyDashboardState.vue
 import MetricCard from '../components/dashboard/MetricCard.vue'
 import QuarterGoalActionsMenu from '../components/workspace/QuarterGoalActionsMenu.vue'
 import { getCurrentQuarter } from '../utils/today-view'
+import QuarterSummaryImport from '../components/workspace/QuarterSummaryImport.vue'
 
 const route = useRoute()
 const workspace = useWorkspace()
@@ -118,6 +119,7 @@ async function moveGoal(id: string, direction: -1 | 1) {
         </label>
       </section>
 
+      <QuarterSummaryImport />
       <section class="dashboard-metric-grid quarter-metric-grid" aria-label="季度概览">
         <MetricCard
           data-metric="quarter-progress"

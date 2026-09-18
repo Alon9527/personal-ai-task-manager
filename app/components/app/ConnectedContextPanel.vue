@@ -62,7 +62,7 @@ const answer = ref<MiniMaxAnswer | null>(null)
 const selectedTarget = ref<AiModelTarget>(DEFAULT_AI_MODEL_TARGET)
 const providers = ref<ModelProviderProfile[]>([])
 const providersLoading = ref(true)
-const showProviderManager = ref(false)
+const showProviderManager = useState<boolean>('model-manager-open', () => false)
 const notice = ref<string | null>(null)
 const statusError = ref<string | null>(null)
 const providerError = ref<string | null>(null)
@@ -618,7 +618,7 @@ function errorDetail(cause: unknown) {
         <span class="ai-orb"><UIcon name="i-lucide-sparkles" /></span>
         <div>
           <span>AI · {{ selectedTargetInfo.label }}</span>
-          <strong>AI 今日简报</strong>
+          <strong>AI 计划助手</strong>
         </div>
       </div>
       <button

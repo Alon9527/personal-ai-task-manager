@@ -7,6 +7,19 @@ const NOW = '2026-07-22T08:00:00.000Z'
 describe('LocalWorkspaceGateway', () => {
   beforeEach(() => localStorage.clear())
 
+  it('persists an optional completion date independently of task status and completion timestamp', async () => {
+    const gateway = new LocalWorkspaceGateway(localStorage, () => NOW)
+    const task = await gateway.createTask({ title: '完成日期验收', description: '', projectId: null, milestoneId: null, priority: null, dueDate: null, dueTime: null, isFocus: false, status: 'in_progress', completionDate: '2026-09-18' })
+    expect(task).toMatchObject({ completionDate: '2026-09-18', status: 'in_progress', completedAt: null })
+    await gateway.updateTask(task.id, { completionDate: '2026-09-19' })
+    await gateway.updateTask(task.id, { title: '保留完成日期' })
+    const reopened = new LocalWorkspaceGateway(localStorage, () => NOW)
+    expect((await reopened.loadWorkspace()).tasks.find(item => item.id === task.id)).toMatchObject({ completionDate: '2026-09-19', status: 'in_progress', completedAt: null })
+    expect(await reopened.setTaskCompleted(task.id, true)).toMatchObject({ completionDate: '2026-09-19', completedAt: NOW })
+    expect(await reopened.updateTask(task.id, { completionDate: null })).toMatchObject({ completionDate: null, status: 'done', completedAt: NOW })
+    expect((await new LocalWorkspaceGateway(localStorage).loadWorkspace()).tasks.find(item => item.id === task.id)?.completionDate).toBeNull()
+  })
+
   it('persists project and task CRUD across instances', async () => {
     const first = new LocalWorkspaceGateway(localStorage, () => NOW)
     const project = await first.createProject({ name: '新项目', color: '#3366FF' })

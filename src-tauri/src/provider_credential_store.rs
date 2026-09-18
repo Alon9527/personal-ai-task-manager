@@ -2,6 +2,22 @@ use uuid::Uuid;
 
 const CREDENTIAL_TARGET_PREFIX: &str = "com.focusai.taskmanager/model-provider/";
 const MAX_SECRET_BYTES: usize = 4096;
+const FEISHU_TARGET: &str = "com.focusai.taskmanager/feishu-config-v1";
+
+// A separate credential namespace; never aliases a model-provider or MiniMax key.
+pub(crate) fn read_feishu_config() -> Result<Option<Vec<u8>>, String> {
+    platform::read(FEISHU_TARGET)
+}
+
+pub(crate) fn save_feishu_config(mut blob: Vec<u8>) -> Result<(), String> {
+    let result = if blob.is_empty() || blob.len() > MAX_SECRET_BYTES {
+        Err("飞书配置超出安全存储大小限制".to_string())
+    } else {
+        platform::save(FEISHU_TARGET, &mut blob)
+    };
+    blob.fill(0);
+    result
+}
 const UNSUPPORTED: &str = "unsupported: Windows Credential Manager is unavailable";
 
 pub(crate) fn credential_target(profile_id: &str) -> Result<String, String> {

@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
+  tsconfig: './tests/e2e/tsconfig.json',
   testDir: './tests/e2e',
   use: {
     baseURL: 'http://127.0.0.1:3000',

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 defineProps<{
-  name: 'sun' | 'inbox' | 'quarter' | 'review' | 'bridge' | 'search'
+  name: 'sun' | 'inbox' | 'quarter' | 'review' | 'bridge' | 'search' | 'calendar' | 'folder'
 }>()
 </script>
 
@@ -25,6 +25,8 @@ defineProps<{
       <path d="M2 14h5l2 3h6l2-3h5" />
     </template>
 
+    <template v-else-if="name === 'calendar'"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4M17 3v4M3 11h18" /></template>
+    <template v-else-if="name === 'folder'"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></template>
     <template v-else-if="name === 'quarter'">
       <path d="M4 19V9M10 19V5M16 19v-7M22 19V3" />
       <path d="M2 19h21" />

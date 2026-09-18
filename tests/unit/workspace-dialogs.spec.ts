@@ -58,6 +58,47 @@ const existingTask = {
 } as const
 
 describe('workspace editors', () => {
+  it.each([false, true])('supports optional completion dates in the editor (embedded=%s)', async (embedded) => {
+    const wrapper = await mountSuspended(TaskEditorDialog, {
+      props: { open: true, task: { ...existingTask, completionDate: '2026-09-17' }, projects: [], embedded },
+      global: { stubs: { Teleport: true } },
+    })
+    expect((wrapper.get('[name="completionDate"]').element as HTMLInputElement).value).toBe('2026-09-17')
+    await wrapper.get('[name="completionDate"]').setValue('260918')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ completionDate: '2026-09-18', status: 'in_progress' })
+    await wrapper.get('[name="completionDate"]').setValue('260231')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')).toHaveLength(1)
+    expect(wrapper.text()).toContain('完成日期无效')
+    await wrapper.get('input[aria-label="选择完成日期"]').setValue('2026-10-01')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')?.[1]?.[0]).toMatchObject({ completionDate: '2026-10-01', status: 'in_progress' })
+    await wrapper.get('[name="completionDate"]').setValue('')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')?.[2]?.[0]).toMatchObject({ completionDate: null, status: 'in_progress' })
+    wrapper.unmount()
+  })
+  it('keeps save actions in the header, accepts pasted images and validates date order', async () => {
+    const wrapper = await mountSuspended(TaskEditorDialog, { props: { open: true, task: null, projects: [] }, global: { stubs: { Teleport: true } } })
+    expect(wrapper.find('.dialog-header button[type="submit"]').exists()).toBe(true)
+    expect(wrapper.find('footer.dialog-actions').exists()).toBe(false)
+    await wrapper.get('[name="title"]').setValue('粘贴验收')
+    const image = new File([Uint8Array.from([1,2,3])], 'clipboard.png', { type: 'image/png' })
+    Object.defineProperty(image, 'arrayBuffer', { value: async () => Uint8Array.from([1,2,3]).buffer })
+    await wrapper.get('section.task-editor').trigger('paste', { clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }] } })
+    await vi.waitFor(() => expect(wrapper.findAll('.task-attachment-item')).toHaveLength(1))
+    await wrapper.get('[name="startDate"]').setValue('2026-09-20')
+    await wrapper.get('[name="dueDate"]').setValue('2026-09-18')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')).toBeUndefined()
+    expect(wrapper.text()).toContain('截止日期不能早于开始日期')
+    await wrapper.get('[name="startDate"]').setValue('2026/9/1')
+    await wrapper.get('[name="startDate"]').trigger('blur')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ startDate: '2026-09-01', dueDate: '2026-09-18', attachments: [{ name: 'clipboard.png' }] })
+    wrapper.unmount()
+  })
   it('submits a normalized task payload', async () => {
     const wrapper = await mountSuspended(TaskEditorDialog, {
       props: { open: true, task: null, projects: [], milestones: [] },
@@ -167,10 +208,11 @@ describe('workspace editors', () => {
     expect((wrapper.get('[name="projectId"]').element as HTMLSelectElement).value).toBe(PROJECT_ID)
     expect((wrapper.get('[name="milestoneId"]').element as HTMLSelectElement).value).toBe(MILESTONE_ID)
     expect((wrapper.get('[data-task-status][value="in_progress"]').element as HTMLInputElement).checked).toBe(true)
-    expect((wrapper.get('[name="estimatedMinutes"]').element as HTMLInputElement).value).toBe('45')
+    expect(wrapper.find('[name="estimatedMinutes"]').exists()).toBe(false)
+    expect(wrapper.find('[name="dueTime"]').exists()).toBe(false)
 
     await wrapper.get('[name="title"]').setValue('Updated task')
-    await wrapper.get('[name="estimatedMinutes"]').setValue('60')
+    await wrapper.get('[name="startDate"]').setValue('2026-09-01')
     await wrapper.get('form').trigger('submit')
 
     expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({
@@ -184,7 +226,8 @@ describe('workspace editors', () => {
       isFocus: true,
       status: 'in_progress',
       importance: 'important',
-      estimatedMinutes: 60,
+      estimatedMinutes: 45,
+      startDate: '2026-09-01',
       reminderAt: '2026-09-16T01:00:00.000Z',
       snoozedUntil: null,
     })

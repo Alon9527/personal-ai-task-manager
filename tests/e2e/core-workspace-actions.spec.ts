@@ -23,7 +23,7 @@ test('global search opens a real task and project links filter Today', async ({ 
   await page.locator('[data-project-row]').filter({ hasText: '个人效率系统' }).locator('a').click()
   await expect(page).toHaveURL(/project=10000000-0000-4000-8000-000000000002/)
   await expect(page.locator('h1')).toHaveText('个人效率系统')
-  await expect(page.locator('[data-task-row]')).toHaveCount(4)
+  await expect(page.locator('.suite-board-task')).toHaveCount(4)
 })
 
 test('Today filters, sorting, collapsing, and agenda view are interactive', async ({ page }) => {
@@ -33,12 +33,15 @@ test('Today filters, sorting, collapsing, and agenda view are interactive', asyn
   await expect(page.locator('[data-task-row]')).toHaveCount(1)
 
   await page.getByLabel('任务排序').selectOption('priority')
-  await page.getByRole('button', { name: '日程' }).click()
+  await page.getByRole('button', { name: '日程', exact: true }).click()
   await expect(page.locator('[data-agenda-view] .agenda-task')).toHaveCount(1)
 
   await page.getByRole('button', { name: '列表' }).click()
+  await page.getByLabel('筛选关键词').fill('')
+  const nextGroup = page.locator('[data-today-section="next"]')
+  await expect(nextGroup.locator('[data-task-row]')).toHaveCount(3)
   await page.getByRole('button', { name: '收起今日重点' }).click()
-  await expect(page.locator('[data-task-row]')).toHaveCount(0)
+  await expect(nextGroup.locator('[data-task-row]')).toHaveCount(0)
   await page.reload()
   await expect(page.getByRole('button', { name: '展开今日重点' })).toBeVisible()
 })

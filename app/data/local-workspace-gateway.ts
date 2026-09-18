@@ -332,6 +332,8 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
         milestoneId,
         priority: input.priority,
         dueDate: input.dueDate,
+        startDate: input.startDate ?? null,
+        completionDate: input.completionDate ?? null,
         dueTime: input.dueTime,
         isFocus: input.isFocus,
         status: input.status ?? 'todo',
@@ -379,6 +381,8 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
       if (patch.description !== undefined) task.description = patch.description
       if (patch.priority !== undefined) task.priority = patch.priority
       if (patch.dueDate !== undefined) task.dueDate = patch.dueDate
+      if (patch.startDate !== undefined) task.startDate = patch.startDate
+      if (patch.completionDate !== undefined) task.completionDate = patch.completionDate
       if (patch.dueTime !== undefined) task.dueTime = patch.dueTime
       if (patch.isFocus !== undefined) task.isFocus = patch.isFocus
       if (patch.importance !== undefined) task.importance = patch.importance
