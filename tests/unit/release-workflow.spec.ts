@@ -13,7 +13,7 @@ describe('GitHub Windows release workflow', () => {
     expect(workflow).toContain('updaterJsonPreferNsis: true')
     expect(workflow).toContain('args: --bundles nsis')
     expect(workflow).toContain('run: pnpm test')
-    expect(workflow).toContain('cargo test --manifest-path src-tauri/Cargo.toml --locked -j 1')
+    expect(workflow).toContain('cargo test --manifest-path src-tauri/Cargo.toml --release --locked -j 1')
     expect(workflow.indexOf('run: pnpm test')).toBeLessThan(workflow.indexOf('uses: tauri-apps/tauri-action@'))
     expect(workflow).not.toContain('MINIMAX')
     expect(workflow).not.toContain('OPENAI_API_KEY')

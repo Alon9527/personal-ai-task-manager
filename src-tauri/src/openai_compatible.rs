@@ -589,6 +589,9 @@ fn parse_completion(body: &[u8], status: StatusCode) -> Result<ChatCompletion, T
         .and_then(serde_json::Value::as_array)
         .filter(|choices| !choices.is_empty())
         .ok_or_else(|| malformed(Some(status), "response choices are missing or empty"))?;
+    if matches!(choices[0].get("finish_reason").and_then(serde_json::Value::as_str), Some("length" | "max_tokens")) {
+        return Err(malformed(Some(status), "模型输出达到长度上限，结果被截断。未采用不完整建议，请缩短输入后重试。"));
+    }
     let content = choices[0]
         .get("message")
         .and_then(|message| message.get("content"))
@@ -910,6 +913,15 @@ mod tests {
 
     fn valid_response() -> Vec<u8> {
         br#"{"choices":[{"message":{"content":"OK"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":0}}"#.to_vec()
+    }
+
+    #[test]
+    fn token_limit_response_is_rejected_even_if_content_is_valid_json() {
+        for reason in ["length", "max_tokens"] {
+            let body = serde_json::json!({"choices":[{"finish_reason":reason,"message":{"content":"{\"goals\":[]}"}}]}).to_string();
+            let error = parse_completion(body.as_bytes(), StatusCode::OK).expect_err("truncated completions must not be accepted");
+            assert!(error.to_string().contains("截断"));
+        }
     }
 
     fn call(server: &TestServer, api_key: Option<&str>) -> Result<ChatCompletion, TransportError> {

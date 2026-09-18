@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Focus 个人任务管理器",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "identifier": "com.focusai.taskmanager",
   "build": {
     "beforeDevCommand": "pnpm dev --port 3000",
