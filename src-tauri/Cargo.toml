@@ -1,6 +1,6 @@
 [package]
 name = "focus-ai-task-manager"
-version = "0.3.7"
+version = "0.3.8"
 description = "A local-first personal AI task manager"
 authors = ["Focus AI"]
 edition = "2021"
