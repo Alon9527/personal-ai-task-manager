@@ -411,7 +411,9 @@ function status(profile: ModelProviderProfile) {
 }
 
 function message(error: unknown, fallback: string) {
-  return error instanceof Error && error.message ? error.message : fallback
+  // Tauri Result<_, String> rejections cross IPC as strings, not Error instances.
+  const detail = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
+  return detail.trim() || fallback
 }
 </script>
 

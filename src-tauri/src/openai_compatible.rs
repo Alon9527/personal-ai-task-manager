@@ -445,6 +445,7 @@ async fn chat_completion_guarded(
         &payload,
         timeouts,
         before_execute,
+        parse_completion,
     )
     .await
 }
@@ -475,6 +476,7 @@ pub fn test_connection<'a>(
                 overall: OVERALL_TIMEOUT,
             },
             None,
+            parse_connection_test_response,
         )
         .await
     }
@@ -487,6 +489,7 @@ async fn send_payload_with_hook<T: Serialize + ?Sized>(
     payload: &T,
     timeouts: TransportTimeouts,
     before_execute: Option<&(dyn Fn(Option<&[u8]>) + Sync)>,
+    parse_response: fn(&[u8], StatusCode) -> Result<ChatCompletion, TransportError>,
 ) -> Result<ChatCompletion, TransportError> {
     let mut endpoint = if exact_endpoint {
         normalize_chat_completions_endpoint(base_url)?
@@ -554,8 +557,49 @@ async fn send_payload_with_hook<T: Serialize + ?Sized>(
     if !status.is_success() {
         return Err(http_error(status, &body, has_credential, is_local));
     }
-    parse_completion(&body, status)
+    parse_response(&body, status)
         .map_err(|error| credential_safe_response_error(error, has_credential))
+}
+
+fn parse_connection_test_response(body: &[u8], status: StatusCode) -> Result<ChatCompletion, TransportError> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| malformed(Some(status), "response is not valid JSON"))?;
+    let choice = &value["choices"][0];
+    if !matches!(choice["finish_reason"].as_str(), Some("length" | "max_tokens")) {
+        return parse_completion(body, status);
+    }
+
+    // A deliberately tiny probe can exhaust its budget during reasoning. Accept
+    // only a valid assistant response with evidence of output, never just HTTP 200.
+    // Real task generation continues to use the strict, non-truncated parser.
+    let message = &choice["message"];
+    if message["role"].as_str() != Some("assistant") {
+        return Err(malformed(Some(status), "probe response is not an assistant message"));
+    }
+    let content = match message.get("content") {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Null) => String::new(),
+        _ => return Err(malformed(Some(status), "probe response content has an invalid type")),
+    };
+    let usage = match value.get("usage") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(usage @ serde_json::Value::Object(_)) => Some(usage),
+        _ => return Err(malformed(Some(status), "response usage is not an object")),
+    };
+    let prompt_tokens = parse_usage_token(usage, "prompt_tokens", status)?;
+    let completion_tokens = parse_usage_token(usage, "completion_tokens", status)?;
+    let reported_total = parse_usage_token(usage, "total_tokens", status)?;
+    if content.trim().is_empty() && completion_tokens == 0 {
+        return Err(malformed(Some(status), "probe response has no evidence of model output"));
+    }
+    Ok(ChatCompletion {
+        content,
+        usage: Usage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: if reported_total == 0 { prompt_tokens.saturating_add(completion_tokens) } else { reported_total },
+        },
+    })
 }
 
 async fn read_bounded(
@@ -1244,6 +1288,42 @@ mod tests {
         assert!(body.get("max_completion_tokens").is_none());
         assert!(body.get("temperature").is_none());
         assert!(body.get("top_p").is_none());
+    }
+
+    #[test]
+    fn connection_test_accepts_a_valid_token_limited_assistant_response() {
+        for content in [serde_json::json!("OK"), serde_json::Value::Null, serde_json::json!("")] {
+            for reason in ["length", "max_tokens"] {
+                let body = serde_json::json!({
+                    "choices": [{"finish_reason": reason, "message": {"role": "assistant", "content": content}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18}
+                });
+                let server = response("200 OK", body.to_string().into_bytes());
+                let result = tauri::async_runtime::block_on(test_connection(&server.base_url, None, "synthetic-reasoning-model"));
+                server.finish();
+                assert!(result.is_ok(), "a bounded probe is not a task-generation request: {result:?}");
+                assert!(parse_completion(body.to_string().as_bytes(), StatusCode::OK).is_err(), "generation must still reject truncated advice");
+            }
+        }
+    }
+
+    #[test]
+    fn connection_test_still_rejects_invalid_or_failed_responses() {
+        let cases = [
+            ("401 Unauthorized", serde_json::json!({"error": {"message": "invalid key"}})),
+            ("503 Service Unavailable", serde_json::json!({"error": {"message": "unavailable"}})),
+            ("200 OK", serde_json::json!({"choices": []})),
+            ("200 OK", serde_json::json!({"choices": [{"finish_reason": "length"}]})),
+            ("200 OK", serde_json::json!({"choices": [{"finish_reason": "length", "message": {"role": "assistant", "content": null}}]})),
+            ("200 OK", serde_json::json!({"choices": [{"finish_reason": "length", "message": {"role": "assistant", "content": []}}], "usage": {"completion_tokens": 8}})),
+            ("200 OK", serde_json::json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": null}}], "usage": {"completion_tokens": 8}})),
+        ];
+        for (status, body) in cases {
+            let server = response(status, body.to_string().into_bytes());
+            let result = tauri::async_runtime::block_on(test_connection(&server.base_url, None, "synthetic-model"));
+            server.finish();
+            assert!(result.is_err(), "invalid response must not pass a probe: {body}");
+        }
     }
 
     #[test]

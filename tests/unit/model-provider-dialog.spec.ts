@@ -358,6 +358,28 @@ describe('model provider dialog', () => {
     expect(wrapper.emitted('select')).toBeUndefined()
   })
 
+  it.each([
+    'authentication/authorization (HTTP 401)',
+    'timeout/TLS/network',
+    'malformed-response (HTTP 200)',
+  ])('preserves the native string rejection: %s', async (failure) => {
+    service.testModelProviderConnection.mockRejectedValue(failure)
+    const wrapper = await mountDialog()
+    await wrapper.get('[data-provider-test]').trigger('click')
+    await flush()
+
+    expect(wrapper.get('[data-provider-test-result]').text()).toContain(failure)
+  })
+
+  it.each([null, undefined, '', '   ', { unexpected: 'not a message' }])('uses a safe fallback for an unrecognized rejection: %s', async (failure) => {
+    service.testModelProviderConnection.mockRejectedValue(failure)
+    const wrapper = await mountDialog()
+    await wrapper.get('[data-provider-test]').trigger('click')
+    await flush()
+
+    expect(wrapper.get('[data-provider-test-result]').text()).toBe('连接失败：服务不可用')
+  })
+
   it('returns focus on close and refuses Escape while a mutation is running', async () => {
     let resolveCreate: (value: ReturnType<typeof profile>) => void = () => undefined
     service.createModelProvider.mockImplementation(() => new Promise(resolve => { resolveCreate = resolve }))
