@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, toRaw, watch } from 'vue'
-import { askAi, buildMiniMaxWorkspaceContext } from '../../services/minimax'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { aiErrorMessage, createAiGeneration, isPendingAiPlan, saveAiProposal } from '../../services/ai-generation'
 import { loadAiModelTarget, saveAiModelTarget, DEFAULT_AI_MODEL_TARGET } from '../../services/ai-model-target'
 import type { AiModelTarget } from '../../services/ai-model-target'
 import { MINIMAX_MODELS } from '../../services/minimax-model'
 import { listModelProviders } from '../../services/model-provider'
 import type { ModelProviderProfile } from '../../services/model-provider'
-import { agentPlanDraftSchema } from '../../services/agent-plan-schema'
 import type { AgentAction } from '../../services/agent-plan-schema'
 import { describeMiniMaxAgentAction } from '../../services/minimax-agent'
 import VoiceInputButton from '../workspace/VoiceInputButton.vue'
@@ -29,13 +28,15 @@ async function addImages(files: File[]) {
 function pasteImage(event:ClipboardEvent){const files=clipboardImages(event.clipboardData);if(files.length){event.preventDefault();void addImages(files)}}
 async function selectImages(event:Event){const input=event.target as HTMLInputElement;await addImages(Array.from(input.files??[]));input.value=''}
 const workspace=useWorkspace(); const route=useRoute(); const router=useRouter(); const plan=useAgentPlan(); const ui=useWorkspaceUi()
+const generation = createAiGeneration(() => workspace.readLatestDocument())
+const busy = generation.asking
 const selectedIds=useState<string[]>('suite-inbox-selection',()=>[])
-const inbox=computed(()=>route.path==='/inbox'); const prompt=ref(''); const summary=ref(''); const error=ref(''); const busy=ref(false); const discarded=ref(false)
+const inbox=computed(()=>route.path==='/inbox'); const prompt=ref(''); const summary=ref(''); const error=ref(''); const discarded=ref(false)
 const target=ref<AiModelTarget>(DEFAULT_AI_MODEL_TARGET); const providers=ref<ModelProviderProfile[]>([])
 let requestGeneration=0
-onBeforeUnmount(()=>{requestGeneration++})
-watch([()=>route.path,target],()=>{requestGeneration++;busy.value=false;allowImages.value=false},{deep:true})
-const pending=computed(()=>plan.draft.value && !['applied','discarded'].includes(plan.draft.value.status)?plan.draft.value:null)
+onBeforeUnmount(()=>{requestGeneration++;generation.dispose()})
+watch([()=>route.path,target],()=>{requestGeneration++;generation.invalidate();allowImages.value=false;summary.value='';error.value='';discarded.value=false},{deep:true,flush:'sync'})
+const pending=computed(()=>isPendingAiPlan(plan.draft.value)?plan.draft.value:null)
 const titles=computed(()=>new Map(workspace.tasks.value.map(t=>[t.id,t.title])))
 const selectedTarget=computed({get:()=>target.value.kind==='minimax'?`minimax:${target.value.modelId}`:`custom:${target.value.profileId}`,set:(value:string)=>{const [kind,id]=value.split(':'); target.value=saveAiModelTarget(kind==='minimax'?{kind,modelId:id}:{kind:'custom',profileId:id})}})
 onMounted(async()=>{plan.loadDraft();target.value=loadAiModelTarget();try{providers.value=(await listModelProviders()).profiles}catch{/* Browser preview cannot access desktop registry. */}})
@@ -48,15 +49,18 @@ async function generate(){
  if(images.value.length && target.value.kind!=='custom'){error.value='图片分析请选择支持视觉的 OpenAI 兼容模型；当前内置 MiniMax 接入未启用图片输入。';return}
  const question=prompt.value.trim() || (inbox.value?'请将这些收集箱记录整理成可执行任务，建议重要性、项目归属和日期。请更新已有任务，不重复创建。':'请为今天提出可执行的日程安排，考虑任务重要性、截止日期和预计时长。不要直接执行。')
  if(inbox.value&&!selectedIds.value.length&&!images.value.length){error.value='请先选择要整理的记录，或添加图片。';return}
- busy.value=true; const generation=++requestGeneration
- const requestTarget=structuredClone(toRaw(target.value)); const requestImages=images.value.map(i=>i.dataUrl); const requestInbox=inbox.value;const requestIds=[...selectedIds.value]
- try{const document=await workspace.readLatestDocument();if(generation!==requestGeneration)return;const context=buildMiniMaxWorkspaceContext({...document,tasks:requestInbox&&!requestImages.length?document.tasks.filter(t=>requestIds.includes(t.id)):document.tasks}); const response=await askAi(context,question,requestTarget,...(requestImages.length?[requestImages]:[]))
- if(generation!==requestGeneration)return
- summary.value=response.answer
- if(response.actions.length){if(pending.value)throw new Error('已有其他待确认计划，请先审阅。');const draft=agentPlanDraftSchema.parse({version:1,id:crypto.randomUUID(),question,model:response.model,createdAt:response.generatedAt,updatedAt:response.generatedAt,status:'draft',actions:response.actions,validation:{executable:false,selectedCount:0,dangerousCount:0,estimatedMinutes:0,issueCount:0,issues:[]}});if(!plan.setDraft(draft))throw new Error(plan.error.value??'计划保存失败')}
- prompt.value=''
- images.value=[];allowImages.value=false
- }catch(e){if(generation===requestGeneration)error.value=e instanceof Error?e.message:typeof e==='string'?e:'生成失败，请重试'}finally{if(generation===requestGeneration)busy.value=false}
+ const submittedPrompt=prompt.value
+ const result=await generation.ask({question,target:target.value,images:images.value.map(i=>i.dataUrl),taskIds:inbox.value&&!images.value.length?[...selectedIds.value]:undefined})
+ if(!result?.isCurrent())return
+ if(result.status==='failed'){error.value=result.error;return}
+ const proposal=result.value
+ summary.value=proposal.response.answer
+ if(proposal.error){error.value=proposal.error;return}
+ try {
+   if(proposal.draft && saveAiProposal(plan,proposal.draft).status==='replacement-required')throw new Error('已有其他待确认计划，请先审阅。')
+   if(prompt.value===submittedPrompt)prompt.value=''
+   images.value=[];allowImages.value=false
+ }catch(e){error.value=aiErrorMessage(e)}
 }
 async function confirm(){error.value='';const result=await plan.requestExecution();if(['executed','already-applied','applied-cleanup-failed'].includes(result.status)){summary.value='已将确认的计划写入任务。';return}error.value=plan.error.value??'计划需进一步审阅，请检查关联、冲突或危险操作。';await router.push('/agent-plan')}
 function postpone(){if(!discarded.value){discarded.value=true;return}plan.discardDraft();discarded.value=false;summary.value='已撤销这份建议，没有修改任务。'}

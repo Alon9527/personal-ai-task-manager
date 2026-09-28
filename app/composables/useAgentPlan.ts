@@ -16,7 +16,7 @@ import type { AgentPlanValidation } from '../services/agent-plan-validation'
 type AgentPlanWorkspace = Pick<
   WorkspaceModel,
   'document' | 'readLatestDocument' | 'replaceWorkspaceDocument'
->
+> & Partial<Pick<WorkspaceModel, 'hasAppliedPlan'>>
 
 export type AgentDependencyResolution =
   | 'cancel'
@@ -331,6 +331,22 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
     return next
   }
 
+  function acknowledgeApplied(plan: AgentPlanDraftV1): AgentPlanExecutionResponse {
+    const applied = agentPlanDraftSchema.parse({ ...plan, status: 'applied' })
+    draft.value = applied
+    durablyAppliedRevision = revisionOf(applied)
+    clearConfirmation()
+    pendingDependencyDecision.value = null
+    try {
+      storage.save(applied)
+      draft.value = null
+      validation.value = null
+      selectedActionId.value = null
+    }
+    catch (cause) { error.value = `计划已执行，不会重复写入；草稿清理失败：${userError(cause, '清理失败')}` }
+    return { status: 'already-applied' }
+  }
+
   async function runExecution(
     confirmedToken: string | null = null,
   ): Promise<AgentPlanExecutionResponse> {
@@ -354,6 +370,7 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
     error.value = null
     executionResult.value = []
     try {
+      if (workspace.hasAppliedPlan && await workspace.hasAppliedPlan(initial.id)) return acknowledgeApplied(initial)
       const latest = await workspace.readLatestDocument()
       if (confirmedToken !== null && workspaceRevisionOf(latest) !== dangerWorkspaceRevision) {
         clearConfirmation()
@@ -393,7 +410,7 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
 
       const prepared = persistExecutionCheck(initial, structural, 'draft')
       const simulated = simulate(prepared, latest)
-      await workspace.replaceWorkspaceDocument(simulated.document, latest)
+      await workspace.replaceWorkspaceDocument(simulated.document, latest, prepared.id)
       const applied = agentPlanDraftSchema.parse({ ...prepared, status: 'applied' })
       draft.value = structuredClone(applied)
       validation.value = structuredClone(structural)
@@ -417,6 +434,7 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
       return { status: 'executed', results: executionResult.value }
     }
     catch (cause) {
+      if (cause instanceof WorkspaceError && cause.code === 'already-applied') return acknowledgeApplied(initial)
       const originalMessage = userError(cause, '计划执行失败。')
       const current = draft.value
       const failureStatus: 'conflicted' | 'failed' = isConflictError(cause) ? 'conflicted' : 'failed'

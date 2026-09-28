@@ -2,6 +2,8 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import TaskEditorDialog from '../../app/components/workspace/TaskEditorDialog.vue'
 import ProjectEditorDialog from '../../app/components/workspace/ProjectEditorDialog.vue'
 import DeleteConfirmDialog from '../../app/components/workspace/DeleteConfirmDialog.vue'
+const attachmentInvoke = vi.hoisted(() => vi.fn())
+vi.mock('@tauri-apps/api/core', () => ({ invoke: attachmentInvoke, isTauri: () => true }))
 
 const PROJECT_ID = '10000000-0000-4000-8000-000000000001'
 const OTHER_PROJECT_ID = '10000000-0000-4000-8000-000000000002'
@@ -58,6 +60,51 @@ const existingTask = {
 } as const
 
 describe('workspace editors', () => {
+  it('downloads stored files as resolved content and reports unavailable content', async () => {
+    const id = '40000000-0000-4000-8000-000000000001'
+    attachmentInvoke.mockResolvedValue('data:application/pdf;base64,AQID')
+    const downloads: string[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function(this: HTMLAnchorElement) { downloads.push(this.href) })
+    const wrapper = await mountSuspended(TaskEditorDialog, {
+      props: { open: true, embedded: true, task: { ...existingTask, attachments: [{ id, name: 'stored.pdf', mimeType: 'application/pdf', size: 3, dataUrl: `attachment:${id}` }] }, projects: [] },
+      global: { stubs: { Teleport: true } },
+    })
+    const fileButton = wrapper.findAll('button').find(b => b.text() === 'stored.pdf')!
+    await fileButton.trigger('click')
+    await vi.waitFor(() => expect(downloads).toEqual(['data:application/pdf;base64,AQID']))
+    attachmentInvoke.mockRejectedValue('附件不存在')
+    await fileButton.trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('附件不存在'))
+    expect(downloads).toHaveLength(1)
+    wrapper.unmount(); click.mockRestore()
+  })
+  it('loads a stored image preview without replacing its saved reference', async () => {
+    const id = '40000000-0000-4000-8000-000000000001'
+    attachmentInvoke.mockResolvedValue('data:image/png;base64,AQID')
+    const wrapper = await mountSuspended(TaskEditorDialog, {
+      props: { open: true, task: { ...existingTask, attachments: [{ id, name: 'stored.png', mimeType: 'image/png', size: 3, dataUrl: `attachment:${id}` }] }, projects: [] },
+      global: { stubs: { Teleport: true } },
+    })
+    await vi.waitFor(() => expect(wrapper.get('.task-attachment-item img').attributes('src')).toBe('data:image/png;base64,AQID'))
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')?.[0]?.[0]).toMatchObject({ attachments: [{ dataUrl: `attachment:${id}` }] })
+    wrapper.unmount()
+  })
+  it('does not expose a failed or stale preview from a previously opened task', async () => {
+    let finish!: (value: string) => void
+    attachmentInvoke.mockImplementation(() => new Promise<string>(resolve => { finish = resolve }))
+    const id = '40000000-0000-4000-8000-000000000001'
+    const wrapper = await mountSuspended(TaskEditorDialog, {
+      props: { open: true, task: { ...existingTask, attachments: [{ id, name: 'stored.png', mimeType: 'image/png', size: 3, dataUrl: `attachment:${id}` }] }, projects: [] },
+      global: { stubs: { Teleport: true } },
+    })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    await wrapper.setProps({ task: null })
+    finish('data:image/png;base64,AQID')
+    await nextTick()
+    expect(wrapper.find('.task-attachment-item img').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it.each([false, true])('supports optional completion dates in the editor (embedded=%s)', async (embedded) => {
     const wrapper = await mountSuspended(TaskEditorDialog, {
       props: { open: true, task: { ...existingTask, completionDate: '2026-09-17' }, projects: [], embedded },

@@ -223,6 +223,20 @@ function controller(options: {
   return { state, backing, workspaceModel, simulator }
 }
 
+describe('durable native execution receipts', () => {
+  it('does not replay an old draft after a native commit survived but the draft cleanup did not', async () => {
+    const backing = memoryStorage(draft())
+    const model = { ...workspace(), hasAppliedPlan: vi.fn(async () => true) }
+    const simulator = vi.fn(simulateAgentPlan)
+    const state = createAgentPlanController({ storage: backing.storage, workspace: model, simulate: simulator })
+    state.loadDraft()
+    expect(await state.requestExecution()).toMatchObject({ status: 'already-applied' })
+    expect(simulator).not.toHaveBeenCalled()
+    expect(model.replaceWorkspaceDocument).not.toHaveBeenCalled()
+    expect(backing.current()).toBeNull()
+  })
+})
+
 describe('agent plan state controller', () => {
   it('loads storage once, selects the first selected action, and handles empty storage', () => {
     const populated = controller({ stored: draft([

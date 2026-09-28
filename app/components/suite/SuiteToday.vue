@@ -24,7 +24,7 @@ const agenda=computed(()=>{const dates=[...new Set(filtered.value.map(t=>t.dueDa
 const reminders=computed(()=>active.value.filter(t=>t.reminderAt && new Date(t.reminderAt).getTime()>=Date.now()).length)
 const project=computed(()=>workspace.projects.value.find(p=>p.name!=='收集箱')??null)
 const progress=computed(()=>project.value?deriveProjectProgress(project.value,workspace.milestones.value,workspace.tasks.value):0)
-onMounted(()=>{if(!workspace.ready.value)void workspace.load();try{const saved=JSON.parse(localStorage.getItem('personal-ai-today-groups:v1')??'{}');for(const key of ['next','other','completed'] as const)if(typeof saved?.[key]==='boolean')collapsed.value[key]=saved[key]}catch{/* Ignore malformed preferences, never task data. */}})
+onMounted(()=>{if(!workspace.ready.value)void workspace.load().catch(() => { /* Recovery is shown by the layout. */ });try{const saved=JSON.parse(localStorage.getItem('personal-ai-today-groups:v1')??'{}');for(const key of ['next','other','completed'] as const)if(typeof saved?.[key]==='boolean')collapsed.value[key]=saved[key]}catch{/* Ignore malformed preferences, never task data. */}})
 watch(collapsed,value=>localStorage.setItem('personal-ai-today-groups:v1',JSON.stringify(value)),{deep:true})
 async function addTask(){if(adding.value||!quickTask.value.trim())return;adding.value=true;error.value='';try{await workspace.createTask({title:quickTask.value.trim(),description:'',projectId:null,priority:null,dueDate:today,dueTime:null,isFocus:false,status:'todo',importance:'normal',milestoneId:null});quickTask.value=''}catch(e){error.value=e instanceof Error?e.message:typeof e==='string'?e:'添加失败，请重试'}finally{adding.value=false}}
 </script>

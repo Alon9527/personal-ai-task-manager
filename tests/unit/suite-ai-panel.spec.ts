@@ -41,3 +41,26 @@ it('does not persist a late proposal after the panel is unmounted',async()=>{
  await wrapper.find('.suite-ai-confirm').trigger('click');await flushPromises();wrapper.unmount()
  resolveResponse(response);await flushPromises();expect(injected.plan.setDraft).not.toHaveBeenCalled()
 })
+it('validates the proposal against the captured workspace before saving', async () => {
+ response.actions[0].expectedUpdatedAt = '2000-01-01T00:00:00.000Z'
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ await wrapper.find('.suite-ai-confirm').trigger('click'); await flushPromises()
+ expect(injected.plan.setDraft).toHaveBeenCalledOnce()
+ const draft = injected.plan.setDraft.mock.calls[0][0]
+ expect(draft.validation.issues.some((issue: { code: string }) => issue.code === 'conflict')).toBe(true)
+ expect(draft.validation.executable).toBe(false)
+ wrapper.unmount()
+})
+it('uses a readable format error and preserves the input for retry', async () => {
+ response.generatedAt = 'not-a-date'
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ await wrapper.get('[aria-label="AI 计划要求"]').setValue('安排今天工作')
+ await wrapper.find('.suite-ai-confirm').trigger('click'); await flushPromises()
+ expect(wrapper.get('[role="alert"]').text()).toContain('AI 返回的计划格式无效')
+ expect(wrapper.get('[role="alert"]').text()).not.toContain('invalid_format')
+ expect((wrapper.get('[aria-label="AI 计划要求"]').element as HTMLInputElement).value).toBe('安排今天工作')
+ expect(injected.plan.setDraft).not.toHaveBeenCalled()
+ wrapper.unmount()
+})

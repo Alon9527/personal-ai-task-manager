@@ -47,7 +47,7 @@ const riskGoalIds = computed(() => new Set(quarterMetrics.value.riskGoalIds))
 
 onMounted(() => {
   now.value = new Date()
-  if (!workspace.ready.value) void workspace.load()
+  if (!workspace.ready.value) void workspace.load().catch(() => { /* Model exposes the error and recovery state. */ })
 })
 
 function quarterLabel(quarter: QuarterKey) {

@@ -1,11 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import VoiceInputButton from '../workspace/VoiceInputButton.vue'
 import ModelProviderDialog from './ModelProviderDialog.vue'
 import {
-  askAi,
-  buildMiniMaxWorkspaceContext,
-  generateAiBrief,
   getMiniMaxStatus,
   removeMiniMaxApiKey,
   saveMiniMaxApiKey,
@@ -22,12 +19,10 @@ import type { AiModelTarget } from '../../services/ai-model-target'
 import { listModelProviders } from '../../services/model-provider'
 import type { ModelProviderList, ModelProviderProfile } from '../../services/model-provider'
 import { useAgentPlan } from '../../composables/useAgentPlan'
-import { agentPlanDraftSchema } from '../../services/agent-plan-schema'
 import type { AgentAction, AgentPlanDraftV1 } from '../../services/agent-plan-schema'
-import { validateAgentPlan } from '../../services/agent-plan-validation'
+import { aiErrorMessage as errorMessage, createAiGeneration, isPendingAiPlan as isPendingPlan, saveAiProposal } from '../../services/ai-generation'
+import type { AiProposal } from '../../services/ai-generation'
 import { MINIMAX_MODELS } from '../../services/minimax-model'
-import { workspaceDocumentSchema } from '#shared/workspace'
-import type { WorkspaceDocument } from '#shared/workspace'
 import type {
   MiniMaxAnswer,
   MiniMaxBrief,
@@ -40,20 +35,25 @@ const workspace = useWorkspace()
 const ui = useWorkspaceUi()
 const agentPlan = useAgentPlan()
 const router = useRouter()
+const route = useRoute()
+const generation = createAiGeneration(async () => {
+  if (!workspace.ready.value) await workspace.load()
+  return workspace.readLatestDocument()
+})
 const status = ref<MiniMaxStatus | null>(null)
 const statusLoading = ref(true)
 const apiKey = ref('')
 const region = ref<MiniMaxRegion>('cn')
 const savingKey = ref(false)
 const savingRegion = ref(false)
-const generating = ref(false)
-const asking = ref(false)
+const generating = generation.generatingBrief
+const asking = generation.asking
 const removingKey = ref(false)
 const showSettings = ref(false)
 const confirmRemove = ref(false)
 const showSources = ref(false)
 const suggestionIgnored = ref(false)
-const preparingSuggestion = ref(false)
+const preparingSuggestion = generation.asking
 const question = ref('')
 const questionInput = ref<HTMLInputElement | null>(null)
 const replanFocusPending = ref(false)
@@ -75,9 +75,7 @@ const error = ref<string | null>(null)
 const lastExternalBriefRequest = ref(0)
 let reviewNavigationStarted = false
 let replanFocusTimer: ReturnType<typeof setTimeout> | null = null
-let targetSession = 0
-let briefRequest = 0
-let askRequest = 0
+let replacementRevision: string | undefined
 let providerListRequest = 0
 
 const contextCounts = computed(() => ({
@@ -96,13 +94,12 @@ const selectedTargetValue = computed(() => selectedTarget.value.kind === 'minima
 const selectedCustomProfileId = computed(() => selectedTarget.value.kind === 'custom'
   ? selectedTarget.value.profileId
   : null)
-const ready = computed(() => selectedTarget.value.kind === 'custom'
+const ready = computed(() => !savingKey.value && !savingRegion.value && !removingKey.value && (selectedTarget.value.kind === 'custom'
   ? selectedTargetInfo.value.ready
-  : Boolean(configured.value && status.value?.region))
+  : Boolean(configured.value && status.value?.region)))
 const canShowTargetContent = computed(() => isBuiltInTarget.value ? configured.value : ready.value)
 const visibleError = computed(() => error.value
   ?? (isBuiltInTarget.value ? statusError.value : providerError.value))
-const validProjectIds = computed(() => new Set(workspace.projects.value.map(project => project.id)))
 const recoveryDraft = computed(() => {
   const current = agentPlan.draft.value
   if (!current || !isPendingPlan(current)) return null
@@ -156,9 +153,13 @@ function focusReplanQuestion() {
 }
 
 onBeforeUnmount(() => {
+  generation.dispose()
+  providerListRequest++
   if (replanFocusTimer) clearTimeout(replanFocusTimer)
   replanFocusTimer = null
 })
+
+watch(() => route.path, () => invalidateAiPresentation(), { flush: 'sync' })
 
 watch(() => ui.miniMaxBriefRequest.value, async (request) => {
   if (request <= lastExternalBriefRequest.value) return
@@ -192,6 +193,7 @@ async function refreshStatus() {
 }
 
 async function configure() {
+  invalidateAiPresentation()
   savingKey.value = true
   error.value = null
   try {
@@ -208,6 +210,7 @@ async function configure() {
 }
 
 async function saveRegion() {
+  invalidateAiPresentation()
   savingRegion.value = true
   error.value = null
   try {
@@ -225,37 +228,24 @@ async function saveRegion() {
 }
 async function generateBrief() {
   if (!ready.value || generating.value) return
-  const session = targetSession
-  const request = ++briefRequest
-  const target = structuredClone(toRaw(selectedTarget.value))
-  generating.value = true
   error.value = null
   showSources.value = false
   suggestionIgnored.value = false
-  try {
-    const response = await generateAiBrief(await currentContext(), target)
-    if (session === targetSession && request === briefRequest) brief.value = response
-  }
-  catch (cause) {
-    if (session === targetSession && request === briefRequest) error.value = errorMessage(cause)
-  }
-  finally {
-    if (session === targetSession && request === briefRequest) generating.value = false
-  }
+  const result = await generation.brief(selectedTarget.value)
+  if (!result?.isCurrent()) return
+  if (result.status === 'failed') error.value = result.error
+  else brief.value = result.value
 }
 
 async function proposeSuggestedTask() {
   const suggestion = brief.value?.suggestion
   const currentBrief = brief.value
-  if (!suggestion || !currentBrief || preparingSuggestion.value) return
-  preparingSuggestion.value = true
+  if (!suggestion || !currentBrief || asking.value) return
   error.value = null
   try {
     resetProposalPresentation()
-    const snapshot = await currentContextSnapshot()
-    const projectId = suggestion.projectId && validProjectIds.value.has(suggestion.projectId)
-      ? suggestion.projectId
-      : null
+    // Preserve the association; validation against the fresh snapshot will flag a removed project.
+    const projectId = suggestion.projectId
     const submitted = `采用今日简报建议：${suggestion.title.trim()}`
     lastSubmittedQuestion.value = submitted
     const response: MiniMaxAnswer = {
@@ -283,14 +273,13 @@ async function proposeSuggestedTask() {
       generatedAt: currentBrief.generatedAt,
       usage: currentBrief.usage,
     }
-    answer.value = response
-    await prepareAgentPlan(response, submitted, snapshot.document)
+    const result = await generation.fromAnswer(response, submitted)
+    if (!result?.isCurrent()) return
+    if (result.status === 'failed') error.value = result.error
+    else acceptProposal(result.value, submitted)
   }
   catch (cause) {
     error.value = `无法生成建议计划，请重试。${errorDetail(cause)}`
-  }
-  finally {
-    preparingSuggestion.value = false
   }
 }
 
@@ -344,29 +333,12 @@ function providerFingerprint(profile: ModelProviderProfile) {
 async function submitQuestion() {
   const submitted = question.value.trim()
   if (!submitted || asking.value || !ready.value) return
-  const session = targetSession
-  const request = ++askRequest
-  const target = structuredClone(toRaw(selectedTarget.value))
-  asking.value = true
   error.value = null
-  try {
-    resetProposalPresentation()
-    const snapshot = await currentContextSnapshot()
-    const response = await askAi(snapshot.context, submitted, target)
-    if (session !== targetSession || request !== askRequest) return
-    answer.value = response
-    lastSubmittedQuestion.value = submitted
-    question.value = ''
-    if (response.actions.length > 0) {
-      await prepareAgentPlan(response, submitted, snapshot.document)
-    }
-  }
-  catch (cause) {
-    if (session === targetSession && request === askRequest) error.value = errorMessage(cause)
-  }
-  finally {
-    if (session === targetSession && request === askRequest) asking.value = false
-  }
+  resetProposalPresentation()
+  const result = await generation.ask({ question: submitted, target: selectedTarget.value })
+  if (!result?.isCurrent()) return
+  if (result.status === 'failed') error.value = result.error
+  else acceptProposal(result.value, submitted)
 }
 
 function appendQuestionVoice(text: string) {
@@ -386,11 +358,7 @@ function changeTarget(event: Event) {
 }
 
 function invalidateAiPresentation() {
-  targetSession++
-  briefRequest++
-  askRequest++
-  generating.value = false
-  asking.value = false
+  generation.invalidate()
   brief.value = null
   answer.value = null
   resetProposalPresentation()
@@ -421,6 +389,7 @@ async function deleteCredential() {
     return
   }
   removingKey.value = true
+  invalidateAiPresentation()
   error.value = null
   try {
     status.value = await removeMiniMaxApiKey()
@@ -438,87 +407,44 @@ async function deleteCredential() {
   }
 }
 
-async function currentContext() {
-  return (await currentContextSnapshot()).context
+function acceptProposal(proposal: AiProposal, submitted: string) {
+  answer.value = proposal.response
+  lastSubmittedQuestion.value = submitted
+  if (proposal.error) { error.value = proposal.error; return }
+  clearSubmittedQuestion(submitted)
+  if (!proposal.draft) return
+  proposalDraft.value = proposal.draft
+  persistProposal(proposal.draft)
 }
 
-async function currentContextSnapshot() {
-  if (!workspace.ready.value) await workspace.load()
-  const document = workspaceDocumentSchema.parse(structuredClone(toRaw(workspace.document.value)))
-  return {
-    document,
-    context: buildMiniMaxWorkspaceContext(document, new Date().toISOString()),
-  }
-}
-
-async function prepareAgentPlan(response: MiniMaxAnswer, submitted: string, document: WorkspaceDocument) {
-  try {
-    const draft = buildAgentPlanDraft(response, submitted, document)
-    proposalDraft.value = draft
-    const existing = agentPlan.draft.value
-    if (existing && isPendingPlan(existing) && existing.id !== draft.id) {
-      awaitingReplacement.value = true
-      return
-    }
-    await persistProposal(draft)
-  }
-  catch {
-    proposalDraft.value = null
-    proposalPersisted.value = false
-    awaitingReplacement.value = false
-    question.value = submitted
-    error.value = 'AI 返回的计划格式无效，请重新生成。'
-  }
-}
-
-function buildAgentPlanDraft(response: MiniMaxAnswer, submitted: string, document: WorkspaceDocument) {
-  const initial = agentPlanDraftSchema.parse({
-    version: 1,
-    id: createPlanId(),
-    question: submitted,
-    model: response.model,
-    createdAt: response.generatedAt,
-    updatedAt: response.generatedAt,
-    status: 'draft',
-    actions: response.actions,
-    validation: {
-      executable: false,
-      selectedCount: 0,
-      dangerousCount: 0,
-      estimatedMinutes: 0,
-      issueCount: 0,
-      issues: [],
-    },
-  })
-  const validation = validateAgentPlan(initial, document)
-  return agentPlanDraftSchema.parse({
-    ...initial,
-    validation: {
-      ...validation,
-      issueCount: validation.issues.length,
-    },
-  })
-}
-
-async function persistProposal(draft: AgentPlanDraftV1) {
+function persistProposal(draft: AgentPlanDraftV1, confirmedRevision?: string) {
   if (savingProposal.value) return
   savingProposal.value = true
   error.value = null
   try {
-    const saved = agentPlan.setDraft(structuredClone(toRaw(draft)))
-    if (!saved) throw new Error(agentPlan.error.value ?? '本机草稿存储不可用')
+    const saved = saveAiProposal(agentPlan, draft, confirmedRevision)
+    if (saved.status === 'replacement-required') {
+      replacementRevision = saved.revision
+      awaitingReplacement.value = true
+      if (saved.changed) error.value = '待确认计划已变化，请重新审阅后再决定是否替换。'
+      return
+    }
     proposalPersisted.value = true
     awaitingReplacement.value = false
-    question.value = ''
+    clearSubmittedQuestion(lastSubmittedQuestion.value)
   }
   catch (cause) {
     proposalPersisted.value = false
-    question.value = lastSubmittedQuestion.value
-    error.value = `无法保存 AI 计划草稿，请重试。${errorDetail(cause)}`
+    if (!question.value.trim()) question.value = lastSubmittedQuestion.value
+    error.value = errorMessage(cause)
   }
   finally {
     savingProposal.value = false
   }
+}
+
+function clearSubmittedQuestion(submitted: string) {
+  if (question.value.trim() === submitted) question.value = ''
 }
 
 function retrySaveProposal() {
@@ -528,7 +454,7 @@ function retrySaveProposal() {
 
 function replaceWithProposal() {
   if (!proposalDraft.value || !awaitingReplacement.value) return
-  return persistProposal(proposalDraft.value)
+  return persistProposal(proposalDraft.value, replacementRevision)
 }
 
 async function openAgentPlan() {
@@ -544,13 +470,10 @@ async function openAgentPlan() {
 }
 
 function resetProposalPresentation() {
+  replacementRevision = undefined
   proposalDraft.value = null
   proposalPersisted.value = false
   awaitingReplacement.value = false
-}
-
-function isPendingPlan(draft: AgentPlanDraftV1) {
-  return draft.status === 'draft' || draft.status === 'conflicted' || draft.status === 'failed'
 }
 
 function createPlanId() {
@@ -598,11 +521,6 @@ function generatedLabel(value: string) {
   return Number.isNaN(date.getTime())
     ? value
     : date.toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
-
-function errorMessage(cause: unknown) {
-  if (cause instanceof Error) return cause.message
-  return typeof cause === 'string' ? cause : 'MiniMax 操作失败，请重试'
 }
 
 function errorDetail(cause: unknown) {

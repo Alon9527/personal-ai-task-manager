@@ -303,6 +303,7 @@ describe('MiniMax context panel', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-generate-minimax-brief]').exists()).toBe(true))
 
     await wrapper.get('[data-generate-minimax-brief]').trigger('click')
+    await vi.waitFor(() => expect(minimaxMocks.generateBrief).toHaveBeenCalledOnce())
     expect(minimaxMocks.generateBrief).toHaveBeenCalledWith(expect.any(Object), {
       kind: 'custom',
       profileId: PROFILE_ID,
@@ -430,5 +431,31 @@ describe('MiniMax context panel', () => {
     expect(providerNeutralPath).not.toMatch(/\bapiKey\b/)
     expect(providerNeutralPath).not.toContain('generateMiniMaxBrief')
     expect(providerNeutralPath).not.toContain('askMiniMax')
+  })
+
+  it.each(['region', 'remove'] as const)('invalidates a pending answer when built-in configuration changes: %s', async (change) => {
+    minimaxMocks.getStatus.mockResolvedValue(configuredStatus)
+    minimaxMocks.setRegion.mockResolvedValue({ ...configuredStatus, region: 'global' })
+    minimaxMocks.removeKey.mockResolvedValue({ ...configuredStatus, configured: false })
+    let finish!: (value: any) => void
+    minimaxMocks.ask.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const wrapper = await mountSuspended(ContextPanel)
+    await vi.waitFor(() => expect(wrapper.find('.ask-ai').exists()).toBe(true))
+    await wrapper.get('.ask-ai input').setValue('安排工作')
+    await wrapper.get('.ask-ai').trigger('submit')
+    await vi.waitFor(() => expect(minimaxMocks.ask).toHaveBeenCalledOnce())
+    await wrapper.get('[aria-label="MiniMax 设置"]').trigger('click')
+    if (change === 'region') {
+      await wrapper.get('.settings-region select').setValue('global')
+      await wrapper.get('.secondary-region-button').trigger('click')
+      await vi.waitFor(() => expect(minimaxMocks.setRegion).toHaveBeenCalledOnce())
+    } else {
+      await wrapper.get('.danger-outline').trigger('click')
+      await wrapper.get('.danger-outline').trigger('click')
+      await vi.waitFor(() => expect(minimaxMocks.removeKey).toHaveBeenCalledOnce())
+    }
+    finish({ answer: '不应出现的旧配置回答', actions: [], sources: [], model: 'old', generatedAt: '2026-09-28T01:00:00.000Z', usage: null })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(wrapper.text()).not.toContain('不应出现的旧配置回答')
   })
 })

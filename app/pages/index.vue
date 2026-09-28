@@ -78,7 +78,7 @@ const agendaGroups = computed(() => {
 })
 
 onMounted(() => {
-  if (!workspace.ready.value) void workspace.load()
+  if (!workspace.ready.value) void workspace.load().catch(() => { /* Model exposes the error and recovery state. */ })
   try {
     const saved = localStorage.getItem('personal-ai-today-groups:v1')
     if (saved) collapsedGroups.value = { ...collapsedGroups.value, ...JSON.parse(saved) }

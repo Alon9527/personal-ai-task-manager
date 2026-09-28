@@ -24,7 +24,10 @@ const hasResults = computed(() => taskResults.value.length + projectResults.valu
 
 watch(() => ui.searchPalette.value.open, async (open) => {
   if (!open) return
-  if (!workspace.ready.value) await workspace.load()
+  if (!workspace.ready.value) {
+    try { await workspace.load() }
+    catch { ui.closeSearch(); return }
+  }
   await nextTick()
   input.value?.focus()
 })

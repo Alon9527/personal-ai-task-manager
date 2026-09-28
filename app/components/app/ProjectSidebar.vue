@@ -18,7 +18,7 @@ const inbox = computed(() => workspace.projects.value.find(project => project.na
 const visibleProjects = computed(() => workspace.projects.value.filter(project => project.name !== '收集箱'))
 
 onMounted(() => {
-  if (!workspace.ready.value) void workspace.load()
+  if (!workspace.ready.value) void workspace.load().catch(() => { /* Model exposes the error and recovery state. */ })
 })
 
 async function moveProject(projectId: string, direction: -1 | 1) {

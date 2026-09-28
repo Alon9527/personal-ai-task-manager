@@ -22,10 +22,19 @@ export type CreateQuarterGoalInput = Pick<
 >
 export type UpdateQuarterGoalInput = Partial<CreateQuarterGoalInput>
 
+export type QuarterGoalBatchResult = {
+  document: WorkspaceDocument
+  createdGoalIds: string[]
+  skippedCount: number
+}
+
 export interface WorkspaceGateway {
   readonly mode: 'local' | 'sqlite' | 'supabase'
   loadWorkspace(options?: { includeDeleted?: boolean }): Promise<WorkspaceDocument>
   replaceWorkspaceDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>
+  recoverWorkspaceDocument?(document: WorkspaceDocument): Promise<WorkspaceDocument>
+  hasAppliedPlan?(planId: string): Promise<boolean>
+  applyAgentPlan?(document: WorkspaceDocument, expected: WorkspaceDocument, planId: string): Promise<WorkspaceDocument>
   clearWorkspaceData(): Promise<void>
   emptyTrash(): Promise<void>
   createProject(input: CreateProjectInput): Promise<Project>
@@ -47,13 +56,15 @@ export interface WorkspaceGateway {
   snoozeTask(id: string, until: string): Promise<Task>
   reorderTasks(group: TaskGroup, orderedIds: string[]): Promise<void>
   createQuarterGoal(input: CreateQuarterGoalInput): Promise<QuarterGoal>
+  /** Atomic capability: never emulate by calling createQuarterGoal in a loop. */
+  createQuarterGoals?(input: CreateQuarterGoalInput[]): Promise<QuarterGoalBatchResult>
   updateQuarterGoal(id: string, patch: UpdateQuarterGoalInput): Promise<QuarterGoal>
   deleteQuarterGoal(id: string): Promise<void>
   restoreQuarterGoal(id: string): Promise<QuarterGoal>
   reorderQuarterGoals(quarter: QuarterKey, orderedIds: string[]): Promise<void>
 }
 
-export type WorkspaceErrorCode = 'validation' | 'not-found' | 'conflict' | 'unavailable' | 'unexpected'
+export type WorkspaceErrorCode = 'validation' | 'not-found' | 'conflict' | 'unavailable' | 'unexpected' | 'recovery-required' | 'already-applied'
 
 export class WorkspaceError extends Error {
   constructor(

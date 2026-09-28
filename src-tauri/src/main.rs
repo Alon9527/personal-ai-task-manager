@@ -19,6 +19,7 @@ mod provider_credential_store;
 mod region_store;
 mod voice_typing;
 mod workspace_store;
+mod workspace_attachments;
 
 fn main() {
     tauri::Builder::default()
@@ -101,7 +102,11 @@ fn main() {
             voice_typing::start_windows_voice_typing,
             notifications::show_task_notification,
             workspace_store::workspace_load_document,
+            workspace_store::workspace_load_raw_document,
+            workspace_store::workspace_load_attachment,
             workspace_store::workspace_save_document,
+            workspace_store::workspace_has_applied_plan,
+            workspace_store::workspace_apply_plan,
             workspace_store::workspace_backup_document,
             workspace_store::workspace_load_latest_backup,
             workspace_store::workspace_storage_status,

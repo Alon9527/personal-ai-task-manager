@@ -1,11 +1,57 @@
 import { toRaw } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LocalWorkspaceGateway } from '../../app/data/local-workspace-gateway'
+import { DesktopWorkspaceGateway } from '../../app/data/desktop-workspace-gateway'
+import { createDemoWorkspace } from '../../app/data/demo-workspace'
 import { createWorkspaceModel } from '../../app/models/workspace-model'
 
 describe('workspace model', () => {
   beforeEach(() => localStorage.clear())
   afterEach(() => vi.useRealTimers())
+
+  it('imports a portable backup into a healthy new computer and preserves its previous snapshot', async () => {
+    const empty = { version: 3, projects: [], milestones: [], tasks: [], quarterGoals: [] }
+    localStorage.setItem('personal-ai-workspace:v1', JSON.stringify(empty))
+    const model = createWorkspaceModel(new LocalWorkspaceGateway(localStorage))
+    await model.load()
+    expect(model.recoveryRequired.value).toBe(false)
+    await model.importWorkspaceBackup(createDemoWorkspace())
+    expect(model.tasks.value).toHaveLength(7)
+    expect(Object.keys(localStorage).some(k => k.startsWith('personal-ai-workspace:backup:') && localStorage.getItem(k) === JSON.stringify(empty))).toBe(true)
+  })
+
+  it('exposes recovery state and clears it only after a confirmed valid restore', async () => {
+    localStorage.setItem('personal-ai-workspace:v1', '{broken')
+    const model = createWorkspaceModel(new LocalWorkspaceGateway(localStorage))
+    await expect(model.load()).rejects.toThrow('恢复')
+    expect(model.recoveryRequired.value).toBe(true)
+    expect(model.ready.value).toBe(false)
+    await model.recoverWorkspaceDocument(createDemoWorkspace())
+    expect(model.recoveryRequired.value).toBe(false)
+    expect(model.ready.value).toBe(true)
+    expect(model.error.value).toBeNull()
+    expect(Object.values(localStorage).includes('{broken')).toBe(true)
+  })
+
+  it('routes desktop plan commits to the durable native receipt operation', async () => {
+    let json = JSON.stringify(createDemoWorkspace())
+    const applyPlan = vi.fn(async (next: string) => { json = next })
+    const gateway = new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => json,
+      saveDocument: async next => { json = next },
+      hasAppliedPlan: async () => false,
+      applyPlan,
+    })
+    const model = createWorkspaceModel(gateway)
+    await model.load()
+    const base = await model.readLatestDocument()
+    const next = structuredClone(base)
+    next.projects[0]!.name = '原子计划'
+    await model.replaceWorkspaceDocument(next, base, 'plan-1')
+    expect(applyPlan).toHaveBeenCalledOnce()
+    expect(applyPlan.mock.calls[0]?.[2]).toBe('plan-1')
+    expect(model.document.value.projects[0]?.name).toBe('原子计划')
+  })
 
   it('loads derived metrics, groups, and backend label', async () => {
     const model = createWorkspaceModel(new LocalWorkspaceGateway(localStorage))

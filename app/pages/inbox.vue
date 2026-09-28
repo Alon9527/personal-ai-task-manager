@@ -74,7 +74,7 @@ const someFilteredSelected = computed(() =>
 )
 
 onMounted(() => {
-  if (!workspace.ready.value) void workspace.load()
+  if (!workspace.ready.value) void workspace.load().catch(() => { /* Model exposes the error and recovery state. */ })
 })
 
 watch(

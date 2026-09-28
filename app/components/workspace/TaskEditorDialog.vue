@@ -6,7 +6,7 @@ import type { Milestone, Project, Task } from '#shared/workspace'
 import type { CreateTaskInput } from '../../data/workspace-gateway'
 import { taskAttachmentSchema } from '#shared/workspace'
 import type { TaskAttachment } from '#shared/workspace'
-import { addTaskAttachments, isPreviewableTaskImage } from '../../services/task-attachments'
+import { addTaskAttachments, isPreviewableTaskImage, isStoredTaskAttachment, resolveTaskAttachment } from '../../services/task-attachments'
 import { clipboardImages } from '../../services/clipboard-images'
 import TaskDateInput from './TaskDateInput.vue'
 import { normalizeTaskDateInput } from '../../utils/task-date-input'
@@ -57,6 +57,7 @@ const validationError = ref<string | null>(null)
 const attachmentInput = ref<HTMLInputElement | null>(null)
 const attachmentBusy = ref(false)
 const attachmentError = ref<string | null>(null)
+const attachmentPreviews = ref<Record<string, string>>({})
 const taskStatusOptions = [
   { value: 'inbox', label: '收集箱', icon: 'i-lucide-inbox' },
   { value: 'todo', label: '待办', icon: 'i-lucide-circle' },
@@ -66,6 +67,23 @@ const taskStatusOptions = [
   { value: 'cancelled', label: '已取消', icon: 'i-lucide-circle-x' },
 ] as const
 const filteredMilestones = computed(() => props.milestones.filter(milestone => milestone.projectId === form.projectId))
+
+watch(() => [props.open, form.attachments.map(a => `${a.id}:${a.dataUrl}`).join('|')] as const, async (_value, _old, onCleanup) => {
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
+  attachmentPreviews.value = {}
+  if (!props.open) return
+  for (const attachment of form.attachments) {
+    if (!isPreviewableTaskImage(attachment)) continue
+    try {
+      const url = isStoredTaskAttachment(attachment) ? await resolveTaskAttachment(attachment) : attachment.dataUrl
+      if (cancelled) return
+      attachmentPreviews.value[attachment.id] = url
+    } catch {
+      if (!cancelled) attachmentError.value = `${attachment.name} 预览失败，请检查附件或恢复完整备份`
+    }
+  }
+}, { immediate: true })
 
 watch(
   () => [props.open, props.task, props.defaultProjectId] as const,
@@ -196,14 +214,21 @@ function removeAttachment(id: string) {
   form.attachments = form.attachments.filter(attachment => attachment.id !== id)
 }
 
-function downloadAttachment(attachment: TaskAttachment) {
-  const link = document.createElement('a')
-  link.href = attachment.dataUrl
-  link.download = attachment.name
-  link.rel = 'noopener'
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
+async function downloadAttachment(attachment: TaskAttachment) {
+  const generation = attachmentGeneration
+  try {
+    const url = await resolveTaskAttachment(attachment)
+    if (!props.open || generation !== attachmentGeneration) return
+    const link = document.createElement('a')
+    link.href = url
+    link.download = attachment.name
+    link.rel = 'noopener'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  } catch (cause) {
+    if (generation === attachmentGeneration) attachmentError.value = cause instanceof Error ? cause.message : '附件下载失败'
+  }
 }
 
 function formatAttachmentSize(bytes: number) {
@@ -267,7 +292,7 @@ function toLocalDateTimeInput(value: string | null) {
             <div v-if="form.attachments.length" class="task-attachment-list">
               <article v-for="attachment in form.attachments" :key="attachment.id" class="task-attachment-item">
                 <button type="button" class="task-attachment-preview" :aria-label="`下载 ${attachment.name}`" @click="downloadAttachment(attachment)">
-                  <img v-if="isPreviewableTaskImage(attachment)" :src="attachment.dataUrl" alt="">
+                  <img v-if="isPreviewableTaskImage(attachment) && attachmentPreviews[attachment.id]" :src="attachmentPreviews[attachment.id]" alt="">
                   <span v-else><UIcon name="i-lucide-file" /></span>
                 </button>
                 <button type="button" class="task-attachment-info" @click="downloadAttachment(attachment)">

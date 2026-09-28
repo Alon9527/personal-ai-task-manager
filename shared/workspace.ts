@@ -39,7 +39,7 @@ export const taskAttachmentSchema = z.object({
   size: z.number().int().nonnegative().max(5 * 1024 * 1024),
   dataUrl: z.string().max(7_100_000),
 }).superRefine((attachment, context) => {
-  if (!attachment.dataUrl.startsWith(`data:${attachment.mimeType};base64,`)) {
+  if (attachment.dataUrl !== `attachment:${attachment.id}` && !attachment.dataUrl.startsWith(`data:${attachment.mimeType};base64,`)) {
     context.addIssue({ code: 'custom', path: ['dataUrl'], message: '附件内容格式无效' })
   }
 })

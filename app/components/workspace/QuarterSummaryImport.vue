@@ -41,23 +41,22 @@ function finishReview() { suggestions.value=[];analysis.value='';notice.value=''
 async function confirm() {
  if(busy.value)return
  const chosen=suggestions.value.filter(g=>g.selected&&!g.applied)
+ if(!chosen.length)return
  if(chosen.some(g=>!quarterSuggestionSchema.safeParse(g).success || !g.quarter.startsWith(`${year.value}-Q`))) {
    error.value='请为所选目标填写标题和季度，并检查描述是否过长。';return
  }
- busy.value=true;error.value='';let added=0
+ busy.value=true;error.value='';message.value=''
  try {
- const latest=await workspace.readLatestDocument()
- const seen=new Set(latest.quarterGoals.filter(g=>!g.deletedAt).map(g=>`${g.quarter}:${g.title.trim().toLocaleLowerCase()}`))
- for(const candidate of chosen) {
- if(!alive)break
- const goal=quarterSuggestionSchema.parse(candidate);const key=`${goal.quarter}:${goal.title.toLocaleLowerCase()}`
- if(seen.has(key)){candidate.applied=true;candidate.selected=false;continue}
- const reference=goal.evidence?`\n原文依据：${goal.evidence}`:'\n经用户确认的规划建议（非原文逐字引用）'
- await workspace.createQuarterGoal({quarter:goal.quarter,title:goal.title,description:`${goal.description}\n\n来源：${sourceName.value}${reference}`,progress:0,status:'active'})
- candidate.applied=true;candidate.selected=false;seen.add(key);added++
- }
- message.value=`已添加 ${added} 项季度目标，已存在的同季度同名目标不会重复添加。`
- }catch(e){error.value=`${failure(e)}；此前已成功添加 ${added} 项，不会自动重试。`}finally{busy.value=false}
+ const inputs=chosen.map(candidate=>{
+   const goal=quarterSuggestionSchema.parse(candidate)
+   const reference=goal.evidence?`\n原文依据：${goal.evidence}`:'\n经用户确认的规划建议（非原文逐字引用）'
+   return {quarter:goal.quarter,title:goal.title,description:`${goal.description}\n\n来源：${sourceName.value}${reference}`,progress:0,status:'active' as const}
+ })
+ const result=await workspace.createQuarterGoals(inputs)
+ if(!alive)return
+ for(const candidate of chosen){candidate.applied=true;candidate.selected=false}
+ message.value=`已添加 ${result.addedCount} 项季度目标，跳过 ${result.skippedCount} 项同季度同名目标；已有目标未修改。`
+ }catch(e){if(alive)error.value=`${failure(e)} 本批保存未确认成功，建议和勾选已保留。可重试，系统会先检查已存在的目标。`}finally{if(alive)busy.value=false}
 }
 </script>
 <template><details class="quarter-summary-import"><summary>从年终总结导入今年目标</summary><p>直接导入普通 Word（.docx）或粘贴文本，不需要固定模板、表头或季度格式。先看 AI 分析，再确认添加目标。</p>

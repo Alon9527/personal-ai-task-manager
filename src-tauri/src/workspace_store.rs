@@ -1,10 +1,10 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use serde_json::Value;
 use std::{fs, path::PathBuf, time::Duration};
 use tauri::{AppHandle, Manager, State};
 
-const SQLITE_SCHEMA_VERSION: i64 = 1;
+const SQLITE_SCHEMA_VERSION: i64 = 3;
 const WORKSPACE_DOCUMENT_FIELDS: [&str; 5] = ["version", "projects", "milestones", "tasks", "quarterGoals"];
 const FORBIDDEN_WORKSPACE_KEYS: [&str; 10] = [
     "apikey",
@@ -50,21 +50,38 @@ impl WorkspaceStore {
     }
 
     pub(crate) fn load_document(&self) -> Result<Option<String>, String> {
-        let connection = self.open_connection()?;
-        connection
+        let mut connection = self.open_connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        let original: Option<String> = transaction
             .query_row(
                 "select document_json from workspace_document where singleton = 1",
                 [],
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        let mut result = original.clone();
+        if let Some(raw) = original.as_deref() {
+            // Invalid or older documents are handled by the existing renderer recovery/migration.
+            if validate_document(raw).is_ok() {
+                let canonical = crate::workspace_attachments::prepare_document(&transaction, raw)?;
+                if canonical != raw {
+                    transaction.execute("insert into workspace_document_backup (document_json) values (?1)", [raw]).map_err(|e| e.to_string())?;
+                    crate::workspace_attachments::index_backup(&transaction, transaction.last_insert_rowid(), raw)?;
+                    transaction.execute("update workspace_document set document_json = ?1 where singleton = 1", [&canonical]).map_err(|e| e.to_string())?;
+                    result = Some(canonical);
+                }
+            }
+        }
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(result)
     }
 
-    pub(crate) fn save_document(&self, document_json: &str) -> Result<(), String> {
+    pub(crate) fn save_document(&self, document_json: &str) -> Result<String, String> {
         let document_version = validate_document(document_json)?;
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        let document_json = crate::workspace_attachments::prepare_document(&transaction, document_json)?;
         transaction
             .execute(
                 "insert into workspace_document (singleton, document_version, document_json, updated_at)
@@ -76,13 +93,17 @@ impl WorkspaceStore {
                 params![document_version, document_json],
             )
             .map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())
+        crate::workspace_attachments::collect_unused(&transaction, &document_json)?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(document_json)
     }
 
     fn backup_document(&self, document_json: &str) -> Result<(), String> {
         validate_backup_document(document_json)?;
         let mut connection = self.open_connection()?;
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        // Recovery must retain unreadable originals too. Such backups pin content during GC.
+        let document_json = crate::workspace_attachments::materialize(&transaction, document_json).unwrap_or_else(|_| document_json.to_string());
         transaction
             .execute(
                 "insert into workspace_document_backup (document_json, created_at)
@@ -90,7 +111,20 @@ impl WorkspaceStore {
                 params![document_json],
             )
             .map_err(|error| error.to_string())?;
+        crate::workspace_attachments::index_backup(&transaction, transaction.last_insert_rowid(), &document_json)?;
         transaction.commit().map_err(|error| error.to_string())
+    }
+
+    fn has_applied_plan(&self, plan_id: &str) -> Result<bool, String> {
+        validate_plan_id(plan_id)?;
+        let connection = self.open_connection()?;
+        connection.query_row("select exists(select 1 from workspace_plan_receipts where plan_id = ?1)", [plan_id], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    }
+
+    fn apply_plan(&self, document_json: &str, expected_json: &str, plan_id: &str) -> Result<String, String> {
+        let mut connection = self.open_connection()?;
+        apply_plan_transaction(&mut connection, document_json, expected_json, plan_id)
     }
 
     fn load_latest_backup(&self) -> Result<Option<String>, String> {
@@ -165,6 +199,15 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
     }
+    if current < 2 {
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        transaction.execute_batch("create table if not exists workspace_plan_receipts (
+            plan_id text primary key not null,
+            applied_at text not null default current_timestamp
+        );").map_err(|error| error.to_string())?;
+        transaction.pragma_update(None, "user_version", 2).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+    }
     connection
         .execute_batch(
             "create table if not exists workspace_document_backup (
@@ -174,7 +217,42 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
              );",
         )
         .map_err(|error| error.to_string())?;
+    if current < 3 {
+        let transaction = connection.transaction().map_err(|e| e.to_string())?;
+        crate::workspace_attachments::create_table(&transaction)?;
+        crate::workspace_attachments::index_existing_backups(&transaction)?;
+        transaction.pragma_update(None, "user_version", 3).map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())?;
+    }
     Ok(())
+}
+
+fn validate_plan_id(plan_id: &str) -> Result<(), String> {
+    uuid::Uuid::parse_str(plan_id).map(|_| ()).map_err(|_| "计划 ID 无效".to_string())
+}
+
+fn apply_plan_transaction(connection: &mut Connection, document_json: &str, expected_json: &str, plan_id: &str) -> Result<String, String> {
+    validate_plan_id(plan_id)?;
+    let version = validate_document(document_json)?;
+    validate_document(expected_json)?;
+    let expected: Value = serde_json::from_str(expected_json).map_err(|error| error.to_string())?;
+    // Take the write lock BEFORE reading the base or receipt. Both writes commit together.
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
+    let applied: bool = transaction.query_row("select exists(select 1 from workspace_plan_receipts where plan_id = ?1)", [plan_id], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if applied { return Err("PLAN_ALREADY_APPLIED".into()); }
+    let current: String = transaction.query_row("select document_json from workspace_document where singleton = 1", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    let current_value: Value = serde_json::from_str(&current).map_err(|_| "工作区无法读取，请先恢复有效备份".to_string())?;
+    if current_value != expected { return Err("WORKSPACE_CONFLICT".into()); }
+    let document_json = crate::workspace_attachments::prepare_document(&transaction, document_json)?;
+    transaction.execute("update workspace_document set document_json = ?1, document_version = ?2, updated_at = current_timestamp where singleton = 1", params![document_json, version])
+        .map_err(|error| error.to_string())?;
+    transaction.execute("insert into workspace_plan_receipts (plan_id) values (?1)", [plan_id])
+        .map_err(|error| error.to_string())?;
+    crate::workspace_attachments::collect_unused(&transaction, &document_json)?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(document_json)
 }
 
 fn validate_document(document_json: &str) -> Result<i64, String> {
@@ -416,10 +494,30 @@ pub fn workspace_load_document(state: State<'_, WorkspaceStore>) -> Result<Optio
 }
 
 #[tauri::command]
+pub fn workspace_load_raw_document(state: State<'_, WorkspaceStore>) -> Result<Option<String>, String> {
+    state.open_connection()?.query_row("select document_json from workspace_document where singleton = 1", [], |r| r.get(0)).optional().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_load_attachment(state: State<'_, WorkspaceStore>, attachment_id: String) -> Result<String, String> {
+    crate::workspace_attachments::load_content(&state.open_connection()?, &attachment_id)
+}
+
+#[tauri::command]
+pub fn workspace_has_applied_plan(state: State<'_, WorkspaceStore>, plan_id: String) -> Result<bool, String> {
+    state.has_applied_plan(&plan_id)
+}
+
+#[tauri::command]
+pub fn workspace_apply_plan(state: State<'_, WorkspaceStore>, document_json: String, expected_json: String, plan_id: String) -> Result<String, String> {
+    state.apply_plan(&document_json, &expected_json, &plan_id)
+}
+
+#[tauri::command]
 pub fn workspace_save_document(
     state: State<'_, WorkspaceStore>,
     document_json: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     state.save_document(&document_json)
 }
 
@@ -478,6 +576,238 @@ mod tests {
 
     fn document() -> &'static str {
         r#"{"version":3,"projects":[],"milestones":[],"tasks":[],"quarterGoals":[]}"#
+    }
+
+    fn attachment_document() -> String {
+        serde_json::json!({"version":3,"projects":[],"milestones":[],"quarterGoals":[],"tasks":[{
+            "title":"attachment test", "attachments":[{"id":"40000000-0000-4000-8000-000000000001",
+            "name":"sample.png","mimeType":"image/png","size":3,"dataUrl":"data:image/png;base64,AQID"}]
+        }]}).to_string()
+    }
+
+    #[test]
+    fn attachments_are_stored_outside_the_workspace_json() {
+        let (store, path) = test_store("attachments-separated");
+        store.save_document(&attachment_document()).unwrap();
+        let saved = store.load_document().unwrap().unwrap();
+        assert!(!saved.contains("base64"), "normal task data must not carry file bytes");
+        assert!(saved.contains("attachment:40000000-0000-4000-8000-000000000001"));
+        let db = store.open_connection().unwrap();
+        let bytes: Vec<u8> = db.query_row("select content from workspace_attachments", [], |row| row.get(0)).unwrap();
+        assert_eq!(bytes, vec![1,2,3]);
+        drop(db);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn attachment_migration_failure_preserves_the_original_and_no_partial_blobs() {
+        let (store, path) = test_store("attachments-migration-fails");
+        let db = store.open_connection().unwrap();
+        let original = attachment_document();
+        db.execute("insert into workspace_document (singleton, document_version, document_json) values (1,3,?1)", [&original]).unwrap();
+        db.execute_batch("create trigger fail_blob before insert on workspace_attachments begin select raise(abort, 'disk failure'); end;").unwrap();
+        assert!(store.load_document().is_err());
+        let kept: String = db.query_row("select document_json from workspace_document", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, original);
+        assert_eq!(db.query_row("select count(*) from workspace_attachments", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert!(store.load_latest_backup().unwrap().is_none());
+        drop(db);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn attachment_content_and_receipt_roll_back_together_on_plan_failure() {
+        let (store, path) = test_store("attachments-plan-atomic");
+        store.save_document(document()).unwrap();
+        let db = store.open_connection().unwrap();
+        db.execute_batch("create trigger fail_receipt before insert on workspace_plan_receipts begin select raise(abort, 'failure'); end;").unwrap();
+        let id = "10000000-0000-4000-8000-000000000009";
+        assert!(store.apply_plan(&attachment_document(), document(), id).is_err());
+        assert!(!store.has_applied_plan(id).unwrap());
+        assert_eq!(db.query_row("select count(*) from workspace_attachments", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(store.load_document().unwrap().unwrap(), document());
+        db.execute_batch("drop trigger fail_receipt;").unwrap();
+        let saved = store.apply_plan(&attachment_document(), document(), id).unwrap();
+        assert!(!saved.contains("base64"));
+        assert!(store.has_applied_plan(id).unwrap());
+        assert_eq!(store.apply_plan(document(), &saved, id).unwrap_err(), "PLAN_ALREADY_APPLIED");
+        drop(db);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn attachment_backup_is_portable_after_clear_and_restore_on_another_database() {
+        let (store, path) = test_store("attachments-backup");
+        let saved = store.save_document(&attachment_document()).unwrap();
+        store.backup_document(&saved).unwrap();
+        let backup = store.load_latest_backup().unwrap().unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&backup).unwrap(), serde_json::from_str::<Value>(&attachment_document()).unwrap());
+        store.save_document(document()).unwrap();
+        let db = store.open_connection().unwrap();
+        assert_eq!(db.query_row("select count(*) from workspace_attachments", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        let (other, other_path) = test_store("attachments-restore-other");
+        let restored = other.save_document(&backup).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&restored).unwrap(), serde_json::from_str::<Value>(&saved).unwrap());
+        assert_eq!(crate::workspace_attachments::load_content(&other.open_connection().unwrap(), "40000000-0000-4000-8000-000000000001").unwrap(), "data:image/png;base64,AQID");
+        drop(db);
+        remove_test_database(&path);
+        remove_test_database(&other_path);
+    }
+
+    #[test]
+    fn references_do_not_rewrite_blobs_and_soft_delete_keeps_them() {
+        let (store, path) = test_store("attachments-lifecycle");
+        let saved = store.save_document(&attachment_document()).unwrap();
+        let db = store.open_connection().unwrap();
+        db.execute_batch("create trigger no_blob_rewrite before update on workspace_attachments begin select raise(abort, 'unexpected blob rewrite'); end;").unwrap();
+        let mut edited: Value = serde_json::from_str(&saved).unwrap();
+        edited["tasks"][0]["deletedAt"] = Value::String("2026-09-27T00:00:00Z".into());
+        store.save_document(&edited.to_string()).unwrap();
+        assert_eq!(crate::workspace_attachments::load_content(&db, "40000000-0000-4000-8000-000000000001").unwrap(), "data:image/png;base64,AQID");
+        store.save_document(&saved).unwrap();
+        assert!(store.save_document(&attachment_document().replace("AQID", "BAUG")).is_err());
+        assert!(store.save_document(&attachment_document().replace("AQID", "AQ==")).is_err());
+        store.backup_document("{corrupt recovery snapshot").unwrap();
+        store.save_document(document()).unwrap();
+        assert_eq!(db.query_row("select count(*) from workspace_attachments", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        drop(db);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn missing_referenced_attachment_blocks_load_without_overwriting_the_document() {
+        let (store, path) = test_store("attachments-missing");
+        let saved = store.save_document(&attachment_document()).unwrap();
+        let db = store.open_connection().unwrap();
+        db.execute("delete from workspace_attachments where id = ?1", ["40000000-0000-4000-8000-000000000001"]).unwrap();
+        assert!(store.load_document().is_err(), "dangling references must enter recovery instead of pretending success");
+        assert_eq!(db.query_row("select document_json from workspace_document", [], |r| r.get::<_, String>(0)).unwrap(), saved);
+        drop(db);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn backup_reference_index_pins_corrupt_content_without_rescanning_backup_bodies() {
+        let (store, path) = test_store("attachments-backup-index");
+        let original_id = "40000000-0000-4000-8000-000000000001";
+        let saved = store.save_document(&attachment_document()).unwrap();
+        let db = store.open_connection().unwrap();
+        db.execute("update workspace_attachments set mime_type = 'application/octet-stream' where id = ?1", [original_id]).unwrap();
+        assert!(store.load_document().is_err());
+        store.backup_document(&saved).unwrap();
+        let index_count = db.query_row("select count(*) from workspace_attachment_pins where attachment_id = ?1", [original_id], |r| r.get::<_, i64>(0));
+        assert!(matches!(index_count, Ok(1)), "recovery backups must have a precomputed reference index");
+        // Explicit restore gives the portable file a fresh ID; it never overwrites corrupt evidence.
+        let new_id = "40000000-0000-4000-8000-000000000002";
+        store.save_document(&attachment_document().replace(original_id, new_id)).unwrap();
+        assert_eq!(crate::workspace_attachments::load_content(&db, new_id).unwrap(), "data:image/png;base64,AQID");
+        assert_eq!(db.query_row("select count(*) from workspace_attachments", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+        drop(db);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn schema_two_backups_are_indexed_once_and_pin_unreadable_snapshots() {
+        let mut db = Connection::open_in_memory().unwrap();
+        db.execute_batch("create table workspace_document_backup (id integer primary key, document_json text not null, created_at text);
+            insert into workspace_document_backup values (1, '{corrupt old backup', 'before'); pragma user_version = 2;").unwrap();
+        migrate(&mut db).unwrap();
+        assert_eq!(db.query_row("select retain_all from workspace_attachment_gc_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap(), 3);
+        assert_eq!(db.query_row("select document_json from workspace_document_backup where id = 1", [], |r| r.get::<_, String>(0)).unwrap(), "{corrupt old backup");
+    }
+
+    #[test]
+    fn megabyte_attachment_is_absent_from_subsequent_task_save_payloads() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let (store, path) = test_store("attachments-size");
+        let mut original: Value = serde_json::from_str(&attachment_document()).unwrap();
+        original["tasks"][0]["attachments"][0]["size"] = Value::from(1024 * 1024);
+        original["tasks"][0]["attachments"][0]["dataUrl"] = Value::from(format!("data:image/png;base64,{}", STANDARD.encode(vec![1u8;1024*1024])));
+        let inline = original.to_string();
+        assert!(inline.len() > 1_000_000);
+        let compact = store.save_document(&inline).unwrap();
+        assert!(compact.len() < 500, "ordinary edits must carry only small file references");
+        let db = store.open_connection().unwrap();
+        db.execute_batch("create trigger reject_insert before insert on workspace_attachments begin select raise(abort,'unexpected insert'); end;
+            create trigger reject_update before update on workspace_attachments begin select raise(abort,'unexpected update'); end;").unwrap();
+        store.save_document(&compact).unwrap();
+        drop(db);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn legacy_attachments_migrate_on_read_with_an_original_backup() {
+        let (store, path) = test_store("attachments-legacy");
+        let db = store.open_connection().unwrap();
+        db.execute("insert into workspace_document (singleton, document_version, document_json) values (1,3,?1)", [attachment_document()]).unwrap();
+        drop(db);
+        let loaded = store.load_document().unwrap().unwrap();
+        assert!(!loaded.contains("base64"), "legacy read must migrate to references");
+        assert_eq!(store.load_latest_backup().unwrap().unwrap(), attachment_document());
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn migrates_a_plan_receipt_ledger_without_replacing_existing_data() {
+        let mut db = Connection::open_in_memory().unwrap();
+        db.execute_batch("create table workspace_document (singleton integer primary key, document_version integer, document_json text, updated_at text); pragma user_version = 1;").unwrap();
+        db.execute("insert into workspace_document values (1, 3, ?1, 'before')", [document()]).unwrap();
+        migrate(&mut db).unwrap();
+        let receipts = db.query_row("select count(*) from workspace_plan_receipts", [], |row| row.get::<_, i64>(0));
+        assert!(receipts.is_ok(), "safe plan execution requires a durable receipt table");
+        let saved: String = db.query_row("select document_json from workspace_document", [], |row| row.get(0)).unwrap();
+        assert_eq!(saved, document());
+    }
+
+    #[test]
+    fn plan_commit_is_atomic_idempotent_and_checks_the_current_base() {
+        let mut db = Connection::open_in_memory().unwrap();
+        migrate(&mut db).unwrap();
+        db.execute("insert into workspace_document (singleton, document_version, document_json) values (1, 3, ?1)", [document()]).unwrap();
+        let id = "10000000-0000-4000-8000-000000000001";
+        let next = r#"{"version":3,"projects":[],"milestones":[],"tasks":[{"title":"only once"}],"quarterGoals":[]}"#;
+        apply_plan_transaction(&mut db, next, document(), id).unwrap();
+        // A stale renderer cannot replay the same plan even with a different replacement.
+        assert_eq!(apply_plan_transaction(&mut db, document(), next, id).unwrap_err(), "PLAN_ALREADY_APPLIED");
+        assert_eq!(apply_plan_transaction(&mut db, document(), document(), "10000000-0000-4000-8000-000000000002").unwrap_err(), "WORKSPACE_CONFLICT");
+        let saved: String = db.query_row("select document_json from workspace_document", [], |row| row.get(0)).unwrap();
+        assert_eq!(saved, next);
+        let count: i64 = db.query_row("select count(*) from workspace_plan_receipts", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn receipt_failure_rolls_back_the_document_write_and_allows_safe_retry() {
+        let mut db = Connection::open_in_memory().unwrap();
+        migrate(&mut db).unwrap();
+        db.execute("insert into workspace_document (singleton, document_version, document_json) values (1, 3, ?1)", [document()]).unwrap();
+        db.execute_batch("create trigger fail_receipt before insert on workspace_plan_receipts begin select raise(abort, 'synthetic disk failure'); end;").unwrap();
+        let next = r#"{"version":3,"projects":[],"milestones":[],"tasks":[{"title":"rollback"}],"quarterGoals":[]}"#;
+        let id = "10000000-0000-4000-8000-000000000001";
+        assert!(apply_plan_transaction(&mut db, next, document(), id).is_err());
+        let saved: String = db.query_row("select document_json from workspace_document", [], |row| row.get(0)).unwrap();
+        assert_eq!(saved, document());
+        let count: i64 = db.query_row("select count(*) from workspace_plan_receipts", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0);
+        db.execute_batch("drop trigger fail_receipt;").unwrap();
+        apply_plan_transaction(&mut db, next, document(), id).unwrap();
+    }
+
+    #[test]
+    fn plan_receipt_survives_reopening_the_database_and_normal_workspace_replacement() {
+        let (store, path) = test_store("plan-receipt-restart");
+        store.save_document(document()).unwrap();
+        let id = "10000000-0000-4000-8000-000000000001";
+        store.apply_plan(document(), document(), id).unwrap();
+        drop(store);
+        let reopened = WorkspaceStore::for_test_database(path.clone()).unwrap();
+        assert!(reopened.has_applied_plan(id).unwrap());
+        reopened.save_document(document()).unwrap();
+        assert_eq!(reopened.apply_plan(document(), document(), id).unwrap_err(), "PLAN_ALREADY_APPLIED");
+        assert!(reopened.has_applied_plan("not-a-plan-id").is_err());
+        drop(reopened);
+        remove_test_database(&path);
     }
 
     #[test]

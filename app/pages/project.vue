@@ -12,7 +12,7 @@ const progress=computed(()=>project.value?deriveProjectProgress(project.value,mi
 const files=computed(()=>tasks.value.flatMap(task=>task.attachments.map(file=>({file,task}))))
 const columns=[{id:'todo',label:'待办'},{id:'in_progress',label:'进行中'},{id:'done',label:'已完成'}]
 function columnTasks(id:string) { return tasks.value.filter(t=>id==='todo'?['inbox','todo','waiting'].includes(t.status):t.status===id) }
-onMounted(()=>{if(!workspace.ready.value) void workspace.load()})
+onMounted(()=>{if(!workspace.ready.value) void workspace.load().catch(() => { /* Recovery is shown by the layout. */ })})
 </script>
 <template><main class="suite-page"><SuiteHeader :section="`项目 / ${project?.name??'项目'}`" /><div class="suite-content">
 <template v-if="project"><header class="suite-heading"><div><h1><span class="suite-project-icon" :style="{color:project.color}"><UIcon name="i-lucide-folder" /></span>{{ project.name }}</h1><p>{{ project.description || '从创意到成果，每一步都清晰可见。' }}</p></div><button class="suite-secondary" @click="ui.openFeishuLinks"><UIcon name="i-lucide-external-link" />打开飞书</button><button class="suite-icon" aria-label="编辑项目" @click="ui.openEditProject(project.id)"><UIcon name="i-lucide-ellipsis" /></button></header>

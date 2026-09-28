@@ -20,7 +20,7 @@ const tasks = computed(() => workspace.tasks.value.filter(t => {
   return true
 }))
 const columns = [{id:'todo',label:'待办'},{id:'in_progress',label:'进行中'},{id:'waiting',label:'等待中'},{id:'done',label:'已完成'}]
-onMounted(async () => { if (!workspace.ready.value) await workspace.load(); await nextTick(); if (scroll.value) scroll.value.scrollTop = 8*64 })
+onMounted(async () => { if (!workspace.ready.value) { try { await workspace.load() } catch { return } } await nextTick(); if (scroll.value) scroll.value.scrollTop = 8*64 })
 function shift(n: number) { const d = new Date(anchor.value); d.setDate(d.getDate()+n*7); anchor.value=d }
 function choose(task: Task) { creating.value=false; selectedId.value=task.id; error.value='' }
 function create(day = today, hour = '09:00') { defaultDate.value=day; defaultTime.value=hour; selectedId.value=null; creating.value=true; error.value='' }

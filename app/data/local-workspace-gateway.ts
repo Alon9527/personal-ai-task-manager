@@ -1,5 +1,6 @@
 import { createDemoWorkspace } from './demo-workspace'
 import { WorkspaceError } from './workspace-gateway'
+import { parseQuarterGoalBatch, quarterGoalKey } from '../services/quarter-goal-batch'
 import type {
   CreateMilestoneInput,
   CreateProjectInput,
@@ -85,6 +86,17 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
   async replaceWorkspaceDocument(document: WorkspaceDocument): Promise<WorkspaceDocument> {
     const validated = workspaceDocumentSchema.parse(structuredClone(document))
     return await this.enqueueMutation(() => {
+      this.readDocument()
+      this.persist(validated)
+      return structuredClone(validated)
+    })
+  }
+
+  async recoverWorkspaceDocument(document: WorkspaceDocument): Promise<WorkspaceDocument> {
+    const validated = workspaceDocumentSchema.parse(document)
+    return this.enqueueMutation(() => {
+      const original = this.storage.getItem(LOCAL_WORKSPACE_STORAGE_KEY)
+      if (original !== null) this.storage.setItem(`${BACKUP_PREFIX}${this.now()}:${crypto.randomUUID()}`, original)
       this.persist(validated)
       return structuredClone(validated)
     })
@@ -101,6 +113,7 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
 
   async clearWorkspaceData(): Promise<void> {
     await this.enqueueMutation(() => {
+      this.readDocument()
       this.persist({
         version: 3,
         projects: [],
@@ -528,6 +541,32 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
     })
   }
 
+  async createQuarterGoals(input: CreateQuarterGoalInput[]) {
+    // Parse before waiting for the queue: edits to caller-owned drafts cannot alter this batch.
+    const inputs = parseQuarterGoalBatch(input)
+    return this.mutate(draft => {
+      const seen = new Set(draft.quarterGoals.filter(goal => goal.deletedAt === null).map(quarterGoalKey))
+      const createdGoalIds: string[] = []
+      let skippedCount = 0
+      const timestamp = this.now()
+      for (const item of inputs) {
+        const key = quarterGoalKey(item)
+        if (seen.has(key)) { skippedCount++; continue }
+        const sortOrder = draft.quarterGoals
+          .filter(goal => goal.deletedAt === null && goal.quarter === item.quarter)
+          .reduce((maximum, goal) => Math.max(maximum, goal.sortOrder), -1) + 1
+        const goal: QuarterGoal = {
+          ...item, id: this.createId(), ownerId: DEMO_OWNER_ID, sortOrder,
+          createdAt: timestamp, updatedAt: timestamp, deletedAt: null,
+        }
+        draft.quarterGoals.push(goal)
+        createdGoalIds.push(goal.id)
+        seen.add(key)
+      }
+      return { document: draft, createdGoalIds, skippedCount }
+    })
+  }
+
   async updateQuarterGoal(id: string, patch: UpdateQuarterGoalInput): Promise<QuarterGoal> {
     return this.mutate((draft) => {
       const goal = draft.quarterGoals.find(item => item.id === id && item.deletedAt === null)
@@ -593,14 +632,7 @@ export class LocalWorkspaceGateway implements WorkspaceGateway {
       if (wasLegacy) this.persist(document)
       return document
     } catch (cause) {
-      try {
-        this.storage.setItem(`${BACKUP_PREFIX}${this.now()}`, raw)
-        const seed = createDemoWorkspace()
-        this.persist(seed)
-        return seed
-      } catch (storageCause) {
-        throw new WorkspaceError('unavailable', '本地数据无法恢复', { cause: storageCause ?? cause })
-      }
+      throw new WorkspaceError('recovery-required', '工作区无法读取，原始数据已保留。请恢复有效备份，不会自动填入演示任务。', { cause })
     }
   }
 

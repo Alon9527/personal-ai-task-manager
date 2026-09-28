@@ -213,6 +213,7 @@ function installHarness(initialDraft: AgentPlanDraftV1 | null = null) {
     tasks: ref(document.tasks),
     quarterGoals: ref(document.quarterGoals),
     load: vi.fn(),
+    readLatestDocument: vi.fn().mockResolvedValue(document),
     createProject: vi.fn(), updateProject: vi.fn(), deleteProject: vi.fn(),
     createMilestone: vi.fn(), updateMilestone: vi.fn(), deleteMilestone: vi.fn(),
     createTask: vi.fn(), updateTask: vi.fn(), deleteTask: vi.fn(),
@@ -255,6 +256,91 @@ function expectNoWorkspaceWrites(workspace: ReturnType<typeof installHarness>['w
 }
 
 describe('MiniMax Agent plan integration', () => {
+  it('does not save a late answer after unmount', async () => {
+    const { controller } = installHarness()
+    let resolveAnswer!: (value: ReturnType<typeof answer>) => void
+    minimaxMocks.ask.mockReturnValueOnce(new Promise(resolve => { resolveAnswer = resolve }))
+    const wrapper = await mountPanel()
+    await wrapper.get('.ask-ai input').setValue('请规划官网')
+    await wrapper.get('.ask-ai').trigger('submit')
+    await vi.waitFor(() => expect(minimaxMocks.ask).toHaveBeenCalledOnce())
+    wrapper.unmount()
+    resolveAnswer(answer())
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(controller.setDraft).not.toHaveBeenCalled()
+  })
+
+  it('reads the latest persisted document rather than the cached UI document', async () => {
+    const { workspace } = installHarness()
+    const latest = createDemoWorkspace()
+    latest.tasks[0]!.title = '最新已保存的任务'
+    workspace.readLatestDocument.mockResolvedValueOnce(latest)
+    const wrapper = await mountPanel()
+    await ask(wrapper)
+    expect(workspace.readLatestDocument).toHaveBeenCalledOnce()
+    expect(minimaxMocks.ask.mock.calls[0]![0].tasks.some((t: { title: string }) => t.title === '最新已保存的任务')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('does not replace a pending plan edited after the replacement prompt appeared', async () => {
+    const { controller } = installHarness(pendingDraft())
+    const wrapper = await mountPanel()
+    await ask(wrapper)
+    controller.draft.value = { ...controller.draft.value!, question: '刚刚编辑的计划' }
+    await wrapper.get('[data-replace-agent-plan]').trigger('click')
+    expect(controller.setDraft).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="alert"]').text()).toContain('计划已变化')
+    wrapper.unmount()
+  })
+
+  it('keeps a brief suggestion linked to a project present in the latest snapshot only', async () => {
+    const { controller, workspace } = installHarness()
+    const latest = createDemoWorkspace()
+    const project = { ...latest.projects[0]!, id: '10000000-0000-4000-8000-000000000099', name: '最新项目' }
+    latest.projects.push(project)
+    workspace.readLatestDocument.mockResolvedValue(latest)
+    const brief = briefWithSuggestion()
+    minimaxMocks.generateBrief.mockResolvedValue({ ...brief, suggestion: { ...brief.suggestion, projectId: project.id } })
+    const wrapper = await mountPanel()
+    await wrapper.get('[data-generate-minimax-brief]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-create-suggestion-plan]').exists()).toBe(true))
+    await wrapper.get('[data-create-suggestion-plan]').trigger('click')
+    await vi.waitFor(() => expect(controller.setDraft).toHaveBeenCalledOnce())
+    expect(controller.setDraft.mock.calls[0]![0].actions[0]!.payload).toMatchObject({ projectId: { kind: 'existing', id: project.id } })
+    wrapper.unmount()
+  })
+
+  it('preserves a newly typed question while replacing a previous proposal', async () => {
+    installHarness(pendingDraft())
+    const wrapper = await mountPanel()
+    await ask(wrapper)
+    await wrapper.get('.ask-ai input').setValue('这是下一条问题，不要清除')
+    await wrapper.get('[data-replace-agent-plan]').trigger('click')
+    expect((wrapper.get('.ask-ai input').element as HTMLInputElement).value).toBe('这是下一条问题，不要清除')
+    wrapper.unmount()
+  })
+
+  it('allows a fresh brief suggestion after switching models while an old snapshot is pending', async () => {
+    const { controller, workspace } = installHarness()
+    const wrapper = await mountPanel()
+    await wrapper.get('[data-generate-minimax-brief]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-create-suggestion-plan]').exists()).toBe(true))
+    let finish!: (value: ReturnType<typeof createDemoWorkspace>) => void
+    workspace.readLatestDocument.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await wrapper.get('[data-create-suggestion-plan]').trigger('click')
+    await wrapper.get('[data-minimax-model]').setValue('minimax:MiniMax-M2.7')
+    await wrapper.get('[data-generate-minimax-brief]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-create-suggestion-plan]').exists()).toBe(true))
+    await wrapper.get('[data-create-suggestion-plan]').trigger('click')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const savedBeforeOldFinished = controller.setDraft.mock.calls.length
+    finish(createDemoWorkspace())
+    await new Promise(resolve => setTimeout(resolve, 20))
+    wrapper.unmount()
+    expect(savedBeforeOldFinished).toBe(1)
+    expect(controller.setDraft).toHaveBeenCalledOnce()
+  })
+
   beforeEach(() => {
     localStorage.clear()
     vi.clearAllMocks()
@@ -318,6 +404,7 @@ describe('MiniMax Agent plan integration', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-create-suggestion-plan]').exists()).toBe(true))
 
     await wrapper.get('[data-create-suggestion-plan]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-agent-plan-replacement]').exists()).toBe(true))
     expect(controller.setDraft).not.toHaveBeenCalled()
     expect(controller.draft.value?.id).toBe(old.id)
     expect(wrapper.find('[data-agent-plan-replacement]').exists()).toBe(true)

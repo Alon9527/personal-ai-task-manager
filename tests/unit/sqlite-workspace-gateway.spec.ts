@@ -8,6 +8,62 @@ import { workspaceDocumentSchema } from '../../shared/workspace'
 describe('DesktopWorkspaceGateway', () => {
   beforeEach(() => localStorage.clear())
 
+  it('restores portable files with fresh IDs so damaged existing content cannot block recovery', async () => {
+    const id = '40000000-0000-4000-8000-000000000001'
+    const portable = createDemoWorkspace()
+    portable.tasks[0]!.attachments = [{ id, name: 'fixed.png', mimeType: 'image/png', size: 3, dataUrl: 'data:image/png;base64,AQID' }]
+    const saveDocument = vi.fn(async (raw: string) => {
+      if (JSON.parse(raw).tasks[0]?.attachments[0]?.id === id) throw new Error('immutable ID conflict with damaged row')
+      return raw
+    })
+    const gateway = new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => { throw new Error('attachment is corrupt') },
+      loadRawDocument: async () => '{retained raw source', backupDocument: async () => undefined, saveDocument,
+    })
+    const restored = await gateway.recoverWorkspaceDocument(portable)
+    expect(restored.tasks[0]!.attachments[0]!.id).not.toBe(id)
+    expect(restored.tasks[0]!.attachments[0]!.dataUrl).toBe('data:image/png;base64,AQID')
+    expect(portable.tasks[0]!.attachments[0]!.id).toBe(id)
+  })
+
+  it('offers explicit recovery when native attachment migration fails and backs up the raw source', async () => {
+    const original = JSON.stringify(createDemoWorkspace())
+    const backupDocument = vi.fn(async () => undefined)
+    const gateway = new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => { throw new Error('附件迁移失败') },
+      loadRawDocument: async () => original,
+      saveDocument: async (json: string) => json,
+      backupDocument,
+    })
+    await expect(gateway.loadWorkspace()).rejects.toMatchObject({ code: 'recovery-required' })
+    await gateway.recoverWorkspaceDocument({ version: 3, tasks: [], projects: [], milestones: [], quarterGoals: [] })
+    expect(backupDocument).toHaveBeenCalledWith(original)
+    expect((await gateway.loadWorkspace()).tasks).toEqual([])
+  })
+
+  it('uses the committed native attachment references for its cache and returned task', async () => {
+    const id = '40000000-0000-4000-8000-000000000001'
+    let saved: string | null = null
+    const writes: string[] = []
+    const gateway = new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => saved,
+      saveDocument: async (raw: string) => {
+        writes.push(raw)
+        const doc = JSON.parse(raw)
+        for (const task of doc.tasks) for (const a of task.attachments ?? []) a.dataUrl = `attachment:${a.id}`
+        saved = JSON.stringify(doc)
+        return saved
+      },
+    })
+    const task = await gateway.createTask({ title: 'test file', description: '', projectId: null, milestoneId: null, priority: null, dueDate: null, dueTime: null, isFocus: false,
+      attachments: [{ id, name: 'photo.png', mimeType: 'image/png', size: 3, dataUrl: 'data:image/png;base64,AQID' }],
+    })
+    expect(task.attachments[0]?.dataUrl).toBe(`attachment:${id}`)
+    await gateway.updateTask(task.id, { title: 'updated without file bytes' })
+    expect(writes.at(-1)).not.toContain('base64')
+    expect((await gateway.loadWorkspace()).tasks[0]?.attachments[0]?.dataUrl).toBe(`attachment:${id}`)
+  })
+
   it('provides a native v3 demo document with no synthetic test titles', async () => {
     const document = createDemoWorkspace()
     const source = await readFile(resolve(process.cwd(), 'app/data/demo-workspace.ts'), 'utf8')
@@ -262,7 +318,7 @@ describe('DesktopWorkspaceGateway', () => {
     expect(await gateway.loadWorkspace({ includeDeleted: true })).toEqual(before)
   })
 
-  it('durably backs up corrupt SQLite JSON before replacing it with a valid document', async () => {
+  it('retains corrupt SQLite JSON and blocks all writes until explicit recovery', async () => {
     let sqliteDocument: string | null = '{corrupt-sqlite'
     let latestBackup: string | null = null
     const calls: string[] = []
@@ -280,13 +336,11 @@ describe('DesktopWorkspaceGateway', () => {
     }
 
     const gateway = new DesktopWorkspaceGateway(localStorage, bridge)
-    const loaded = await gateway.loadWorkspace()
-
-    expect(loaded.version).toBe(3)
-    expect(calls).toEqual(['backup', 'save'])
-    expect(latestBackup).toBe('{corrupt-sqlite')
-    const afterRestart = new DesktopWorkspaceGateway(localStorage, bridge)
-    expect(await afterRestart.loadLatestRecoveryBackup()).toBe('{corrupt-sqlite')
+    await expect(gateway.loadWorkspace()).rejects.toThrow('恢复')
+    await expect(gateway.clearWorkspaceData()).rejects.toThrow('恢复')
+    expect(calls).toEqual([])
+    expect(sqliteDocument).toBe('{corrupt-sqlite')
+    expect(latestBackup).toBeNull()
   })
 
   it('fails closed and retains corrupt SQLite JSON when durable backup fails', async () => {
@@ -300,8 +354,79 @@ describe('DesktopWorkspaceGateway', () => {
 
     const gateway = new DesktopWorkspaceGateway(localStorage, bridge)
 
-    await expect(gateway.loadWorkspace()).rejects.toThrow('backup unavailable')
+    await expect(gateway.loadWorkspace()).rejects.toThrow('恢复')
     expect(sqliteDocument).toBe('{corrupt-sqlite')
     expect(bridge.saveDocument).not.toHaveBeenCalled()
+  })
+
+  it('starts a new desktop workspace empty instead of inserting sample tasks', async () => {
+    const bridge = { loadDocument: async () => null, saveDocument: vi.fn(async () => undefined) }
+    const loaded = await new DesktopWorkspaceGateway(localStorage, bridge).loadWorkspace()
+    expect(loaded).toEqual({ version: 3, projects: [], milestones: [], tasks: [], quarterGoals: [] })
+  })
+
+  it('treats an existing empty SQLite document as corruption, not a new workspace', async () => {
+    const bridge = { loadDocument: async () => '', saveDocument: vi.fn(async () => undefined) }
+    const gateway = new DesktopWorkspaceGateway(localStorage, bridge)
+    await expect(gateway.loadWorkspace()).rejects.toThrow('恢复')
+    await expect(gateway.clearWorkspaceData()).rejects.toThrow('恢复')
+    expect(bridge.saveDocument).not.toHaveBeenCalled()
+  })
+
+  it('restores only an explicitly supplied valid backup and preserves the corrupt original first', async () => {
+    let saved = '{broken'
+    const backups: string[] = []
+    const bridge = {
+      loadDocument: async () => saved,
+      saveDocument: async (value: string) => { saved = value },
+      backupDocument: async (value: string) => { backups.push(value) },
+    }
+    const gateway = new DesktopWorkspaceGateway(localStorage, bridge)
+    await expect(gateway.loadWorkspace()).rejects.toThrow('恢复')
+    expect(gateway.recoverWorkspaceDocument).toBeTypeOf('function')
+    const backup = createDemoWorkspace()
+    await gateway.recoverWorkspaceDocument(backup)
+    expect(backups).toEqual(['{broken'])
+    expect(await gateway.loadWorkspace({ includeDeleted: true })).toEqual(backup)
+  })
+
+  it('never overwrites the original when recovery backup fails', async () => {
+    let saved = '{broken'
+    const gateway = new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => saved,
+      saveDocument: async value => { saved = value },
+      backupDocument: async () => { throw new Error('backup failed') },
+    })
+    expect(gateway.recoverWorkspaceDocument).toBeTypeOf('function')
+    await expect(gateway.recoverWorkspaceDocument(createDemoWorkspace())).rejects.toThrow('backup failed')
+    expect(saved).toBe('{broken')
+  })
+
+  it('uses a native atomic plan commit instead of an ordinary document save', async () => {
+    let saved = JSON.stringify(createDemoWorkspace())
+    const commits: string[] = []
+    const bridge = {
+      loadDocument: async () => saved,
+      saveDocument: vi.fn(async (value: string) => { saved = value }),
+      hasAppliedPlan: async (id: string) => commits.includes(id),
+      applyPlan: async (value: string, expected: string, id: string) => {
+        if (commits.includes(id)) throw 'PLAN_ALREADY_APPLIED'
+        expect(JSON.parse(expected)).toEqual(JSON.parse(saved))
+        saved = value
+        commits.push(id)
+      },
+    }
+    const gateway = new DesktopWorkspaceGateway(localStorage, bridge)
+    const base = await gateway.loadWorkspace({ includeDeleted: true })
+    bridge.saveDocument.mockClear()
+    const next = structuredClone(base)
+    next.projects[0]!.name = '只执行一次'
+    expect(gateway.applyAgentPlan).toBeTypeOf('function')
+    await gateway.applyAgentPlan(next, base, 'plan-1')
+    expect(bridge.saveDocument).not.toHaveBeenCalled()
+    const restarted = new DesktopWorkspaceGateway(localStorage, bridge)
+    expect(await restarted.hasAppliedPlan('plan-1')).toBe(true)
+    await expect(restarted.applyAgentPlan(next, next, 'plan-1')).rejects.toMatchObject({ code: 'already-applied' })
+    expect(commits).toEqual(['plan-1'])
   })
 })

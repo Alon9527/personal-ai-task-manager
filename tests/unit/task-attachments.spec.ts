@@ -5,8 +5,11 @@ import {
   MAX_TASK_ATTACHMENT_BYTES,
   addTaskAttachments,
   isPreviewableTaskImage,
+  resolveTaskAttachment,
+  materializeWorkspaceAttachments,
+  parsePortableWorkspaceBackup,
 } from '../../app/services/task-attachments'
-import { workspaceDocumentSchema } from '../../shared/workspace'
+import { taskAttachmentSchema, workspaceDocumentSchema } from '../../shared/workspace'
 
 function file(name: string, type: string, bytes: number[]) {
   const buffer = Uint8Array.from(bytes).buffer
@@ -19,6 +22,30 @@ function file(name: string, type: string, bytes: number[]) {
 }
 
 describe('task attachments', () => {
+  const stored = { id: '40000000-0000-4000-8000-000000000001', name: 'photo.png', mimeType: 'image/png', size: 3,
+    dataUrl: 'attachment:40000000-0000-4000-8000-000000000001' }
+  it('resolves stored images on demand and validates returned content size', async () => {
+    expect(await resolveTaskAttachment(stored, async () => 'data:image/png;base64,AQID')).toBe('data:image/png;base64,AQID')
+    await expect(resolveTaskAttachment(stored, async () => 'data:image/png;base64,AQ==')).rejects.toThrow('大小')
+    await expect(resolveTaskAttachment(stored, async () => 'https://example.invalid')).rejects.toThrow()
+    await expect(resolveTaskAttachment(stored, async () => { throw new Error('missing') })).rejects.toThrow('missing')
+  })
+  it('exports portable inline attachments without mutating the task document', async () => {
+    const doc = createDemoWorkspace()
+    doc.tasks[0]!.attachments = [stored]
+    const backup = await materializeWorkspaceAttachments(doc, async () => 'data:image/png;base64,AQID')
+    expect(backup.tasks[0]!.attachments[0]!.dataUrl).toBe('data:image/png;base64,AQID')
+    expect(doc.tasks[0]!.attachments[0]!.dataUrl).toBe(stored.dataUrl)
+    expect(parsePortableWorkspaceBackup(backup)).toEqual(backup)
+    expect(() => parsePortableWorkspaceBackup(doc)).toThrow('完整')
+  })
+  it('accepts only a stored reference matching the attachment ID', () => {
+    const id = '40000000-0000-4000-8000-000000000001'
+    const attachment = { id, name: 'photo.png', mimeType: 'image/png', size: 3, dataUrl: `attachment:${id}` }
+    expect(taskAttachmentSchema.safeParse(attachment).success).toBe(true)
+    expect(taskAttachmentSchema.safeParse({ ...attachment, dataUrl: 'attachment:40000000-0000-4000-8000-000000000002' }).success).toBe(false)
+    expect(taskAttachmentSchema.safeParse({ ...attachment, dataUrl: 'https://example.invalid/photo.png' }).success).toBe(false)
+  })
   it('accepts Vue reactive attachment arrays without DataCloneError', async () => {
     const existing = reactive(await addTaskAttachments([], [file('已有.png', 'image/png', [1])]))
     const result = await addTaskAttachments(existing, [file('新图.png', 'image/png', [2])])

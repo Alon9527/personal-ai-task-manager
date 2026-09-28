@@ -6,7 +6,7 @@ const workspace = useWorkspace()
 const confirmingEmpty = ref(false)
 
 onMounted(() => {
-  void workspace.load()
+  void workspace.load().catch(() => { /* Model exposes the error and recovery state. */ })
 })
 
 function deletedLabel(value: string | null) {

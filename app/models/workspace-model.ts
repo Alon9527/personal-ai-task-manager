@@ -16,6 +16,8 @@ import { WorkspaceError } from '../data/workspace-gateway'
 import { createAgentPlanStorage } from '../services/agent-plan-storage'
 import type { AgentPlanStorage } from '../services/agent-plan-storage'
 import { WorkspaceTransaction } from '../data/workspace-transaction'
+import { parsePortableWorkspaceBackup } from '../services/task-attachments'
+import { parseQuarterGoalBatch } from '../services/quarter-goal-batch'
 
 const emptyWorkspace = (): WorkspaceDocument => ({
   version: 3,
@@ -37,6 +39,7 @@ export function createWorkspaceModel(
   const loading = ref(false)
   const saving = ref(false)
   const ready = ref(false)
+  const recoveryRequired = ref(false)
   const error = ref<string | null>(null)
   const backendMode = ref<'local' | 'sqlite' | 'supabase'>(initialGateway?.mode ?? 'local')
   const fallbackReason = ref<string | null>(null)
@@ -60,7 +63,12 @@ export function createWorkspaceModel(
     try {
       document.value = await gateway.loadWorkspace({ includeDeleted: true })
       ready.value = true
+      recoveryRequired.value = false
     } catch (cause) {
+      if (cause instanceof WorkspaceError && cause.code === 'recovery-required') {
+        recoveryRequired.value = true
+        ready.value = false
+      }
       error.value = errorMessage(cause)
       throw cause
     } finally {
@@ -82,6 +90,7 @@ export function createWorkspaceModel(
   async function replaceWorkspaceDocument(
     nextDocument: WorkspaceDocument,
     expectedBase?: WorkspaceDocument,
+    planId?: string,
   ) {
     return enqueueMutation(async () => {
       saving.value = true
@@ -96,7 +105,13 @@ export function createWorkspaceModel(
             throw new WorkspaceError('conflict', '工作区已发生变化，请按当前数据重新检查计划。')
           }
         }
-        const replaced = await new WorkspaceTransaction(requireGateway()).replace(nextDocument)
+        const source = requireGateway()
+        let replaced: WorkspaceDocument
+        if (planId && source.mode === 'sqlite') {
+          if (!source.applyAgentPlan || !expectedBase) throw new Error('当前存储不支持安全执行计划')
+          replaced = await source.applyAgentPlan(workspaceDocumentSchema.parse(nextDocument), expectedBase, planId)
+        }
+        else replaced = await new WorkspaceTransaction(source).replace(nextDocument)
         document.value = structuredClone(replaced)
         ready.value = true
         return structuredClone(replaced)
@@ -108,6 +123,40 @@ export function createWorkspaceModel(
       finally {
         saving.value = false
       }
+    })
+  }
+
+  async function hasAppliedPlan(planId: string) {
+    await mutationTail
+    const source = requireGateway()
+    if (source.mode !== 'sqlite') return false
+    if (!source.hasAppliedPlan) throw new Error('当前存储不支持检查计划执行记录')
+    return source.hasAppliedPlan(planId)
+  }
+
+  async function recoverWorkspaceDocument(backup: WorkspaceDocument) {
+    return restoreWorkspaceBackup(backup, true)
+  }
+
+  async function importWorkspaceBackup(backup: WorkspaceDocument) {
+    return restoreWorkspaceBackup(backup, false)
+  }
+
+  async function restoreWorkspaceBackup(backup: WorkspaceDocument, recoveryOnly: boolean) {
+    const validated = parsePortableWorkspaceBackup(backup)
+    return enqueueMutation(async () => {
+      const source = requireGateway()
+      if ((recoveryOnly && !recoveryRequired.value) || !source.recoverWorkspaceDocument) throw new Error('当前工作区不支持此恢复操作')
+      saving.value = true
+      try {
+        document.value = await source.recoverWorkspaceDocument(validated)
+        recoveryRequired.value = false
+        ready.value = true
+        error.value = null
+        dismissLastDelete()
+      }
+      catch (cause) { error.value = errorMessage(cause); throw cause }
+      finally { saving.value = false }
     })
   }
 
@@ -385,6 +434,25 @@ export function createWorkspaceModel(
     await commit(() => requireGateway().createQuarterGoal(input))
   }
 
+  async function createQuarterGoals(input: CreateQuarterGoalInput[]) {
+    const inputs = parseQuarterGoalBatch(input)
+    return enqueueMutation(async () => {
+      saving.value = true
+      error.value = null
+      try {
+        const source = requireGateway()
+        if (!source.createQuarterGoals) throw new WorkspaceError('unavailable', '当前数据源尚不支持安全批量保存季度目标，请使用本机模式；未执行逐条写入。')
+        const result = await source.createQuarterGoals(inputs)
+        // Do not reload after a successful commit: a failed read must not masquerade as a failed write.
+        document.value = workspaceDocumentSchema.parse(result.document)
+        ready.value = true
+        return { addedCount: result.createdGoalIds.length, skippedCount: result.skippedCount }
+      }
+      catch (cause) { error.value = errorMessage(cause); throw cause }
+      finally { saving.value = false }
+    })
+  }
+
   async function updateQuarterGoal(id: string, patch: UpdateQuarterGoalInput) {
     await commit(() => requireGateway().updateQuarterGoal(id, patch))
   }
@@ -427,6 +495,7 @@ export function createWorkspaceModel(
     loading,
     saving,
     ready,
+    recoveryRequired,
     error,
     backendMode,
     fallbackReason,
@@ -452,6 +521,9 @@ export function createWorkspaceModel(
     metrics: computed(() => view.value.metrics),
     load,
     readLatestDocument,
+    recoverWorkspaceDocument,
+    importWorkspaceBackup,
+    hasAppliedPlan,
     replaceWorkspaceDocument,
     emptyTrash,
     clearWorkspaceData,
@@ -477,6 +549,7 @@ export function createWorkspaceModel(
     moveTask,
     reorderTasks,
     createQuarterGoal,
+    createQuarterGoals,
     updateQuarterGoal,
     deleteQuarterGoal,
     restoreQuarterGoal,

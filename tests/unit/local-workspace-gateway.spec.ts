@@ -81,14 +81,13 @@ describe('LocalWorkspaceGateway', () => {
     expect(saved.focusTasks.map(item => item.id)).toEqual(reversedFocus)
   })
 
-  it('backs up invalid local data before reseeding', async () => {
+  it('preserves invalid local data and blocks writes instead of reseeding', async () => {
     localStorage.setItem('personal-ai-workspace:v1', '{invalid')
     const gateway = new LocalWorkspaceGateway(localStorage, () => NOW)
 
-    const document = await gateway.loadWorkspace()
-
-    expect(document.projects.length).toBeGreaterThan(0)
-    expect(localStorage.getItem(`personal-ai-workspace:backup:${NOW}`)).toBe('{invalid')
+    await expect(gateway.loadWorkspace()).rejects.toThrow('恢复')
+    await expect(gateway.createProject({ name: '不能写入', color: '#112233' })).rejects.toThrow('恢复')
+    expect(localStorage.getItem('personal-ai-workspace:v1')).toBe('{invalid')
   })
 
   it('permanently removes every soft-deleted record when emptying the trash', async () => {

@@ -49,7 +49,7 @@ const trendPolyline = computed(() =>
 )
 
 onMounted(() => {
-  void workspace.load()
+  void workspace.load().catch(() => { /* Model exposes the error and recovery state. */ })
 })
 
 function milestoneDate(timestamp: string) {
