@@ -29,6 +29,15 @@ describe('VoiceInputButton', () => {
     vi.stubGlobal('SpeechRecognition', MockSpeechRecognition)
   })
 
+  it('renders a microphone locally without relying on a remote icon request', () => {
+    const wrapper = mount(VoiceInputButton, { global: { stubs: { UIcon: true } } })
+    const icon = wrapper.get('[data-voice-input]').find('svg')
+    expect(icon.exists()).toBe(true)
+    expect(icon.attributes('viewBox')).toBe('0 0 24 24')
+    expect(icon.find('path').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('explains system processing before the first microphone use', async () => {
     const wrapper = mount(VoiceInputButton, {
       attachTo: document.body,

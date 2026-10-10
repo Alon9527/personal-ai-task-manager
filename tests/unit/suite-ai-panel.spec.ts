@@ -64,3 +64,64 @@ it('uses a readable format error and preserves the input for retry', async () =>
  expect(injected.plan.setDraft).not.toHaveBeenCalled()
  wrapper.unmount()
 })
+
+it('acknowledges a submitted message beside the composer while waiting, then shows the answer', async () => {
+ let resolveResponse!: (value: any) => void
+ injected.ask.mockImplementation(() => new Promise(resolve => { resolveResponse = resolve }))
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ await wrapper.get('[aria-label="AI 计划要求"]').setValue('你好，今天先做什么？')
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(wrapper.find('[data-ai-composer-status]').text()).toContain('正在等待模型回复')
+ expect(wrapper.find('[role="log"]').text()).toContain('你好，今天先做什么？')
+ resolveResponse({ ...response, actions: [], answer: '可以先检查临近截止的事项。' }); await flushPromises()
+ expect(wrapper.get('[role="log"]').text()).toContain('可以先检查临近截止的事项。')
+ expect(wrapper.find('[data-ai-composer-status]').exists()).toBe(false)
+ wrapper.unmount()
+})
+
+it('allows a question with a pending plan without replacing or executing that plan', async () => {
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ await wrapper.get('.suite-ai-confirm').trigger('click'); await flushPromises()
+ const original = injected.plan.draft.value
+ response = { ...response, answer: '建议先做截止时间更早的任务。', actions: [] }
+ injected.ask.mockResolvedValue(response)
+ await wrapper.get('[aria-label="AI 计划要求"]').setValue('为什么这样安排？')
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(wrapper.find('[role="log"]').text()).toContain('建议先做截止时间更早的任务。')
+ expect(injected.plan.draft.value).toBe(original)
+ expect(injected.plan.requestExecution).not.toHaveBeenCalled()
+ wrapper.unmount()
+})
+
+it('keeps the existing plan when a follow-up returns new actions and explains it by the composer', async () => {
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ await wrapper.get('.suite-ai-confirm').trigger('click'); await flushPromises()
+ const original = injected.plan.draft.value
+ await wrapper.get('[aria-label="AI 计划要求"]').setValue('改到下午如何？')
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(wrapper.find('[data-ai-composer-error]').text()).toContain('原计划')
+ expect(injected.plan.draft.value).toBe(original)
+ wrapper.unmount()
+})
+
+it('shows transport failures beside the input and preserves the question for retry', async () => {
+ injected.ask.mockRejectedValue(new Error('本机模型服务未连接'))
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ await wrapper.get('[aria-label="AI 计划要求"]').setValue('请帮我分析任务')
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(wrapper.find('[data-ai-composer-error]').text()).toContain('本机模型服务未连接')
+ expect((wrapper.get('[aria-label="AI 计划要求"]').element as HTMLInputElement).value).toBe('请帮我分析任务')
+ wrapper.unmount()
+})
+
+it('does not turn an empty chat submission into an unsolicited scheduling request', async () => {
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(injected.ask).not.toHaveBeenCalled()
+ wrapper.unmount()
+})

@@ -92,7 +92,8 @@
 .suite-day-column { position:relative; height:1536px; border-left:1px solid #eeeef6; }.suite-day-column.is-today {background:#fcfbff}
 .suite-time-slot { display:block; width:100%; height:64px; padding:0; border:0; border-bottom:1px solid #eeeef6; background:none; cursor:crosshair; }.suite-time-slot:hover{background:#f6f2ff}
 .suite-calendar-event { position:absolute; display:flex; flex-direction:column; align-items:flex-start; gap:3px; border:1px solid color-mix(in srgb,var(--event-color) 55%,white); border-left:3px solid var(--event-color); border-radius:5px; padding:5px; background:color-mix(in srgb,var(--event-color) 17%,white); color:color-mix(in srgb,var(--event-color) 65%,#202438); overflow:hidden; text-align:left; cursor:pointer; }
-.suite-calendar-event strong {font-size:12px;line-height:1.4;word-break:break-word}.suite-calendar-event small{font-size:10px;white-space:nowrap}
+.suite-calendar-event strong {font-size:12px;line-height:16px;word-break:break-word;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;flex-shrink:0}.suite-calendar-event small{font-size:10px;line-height:12px;white-space:nowrap;flex-shrink:0}
+.suite-calendar-event.is-compact{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:4px;padding:3px 4px}.suite-calendar-event.is-compact strong{display:block;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.suite-calendar-event.is-compact small{line-height:12px}
 .suite-calendar-card>.suite-hint{padding:0 12px}
 .suite-task-detail { border:1px solid #e7e6f1; border-radius:12px; background:#fff; min-width:0; padding-bottom:14px; }
 .suite-task-detail>.suite-danger {margin:8px 16px}.suite-task-detail>p{margin:12px;color:#ba4c64}

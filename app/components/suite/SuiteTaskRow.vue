@@ -9,8 +9,11 @@ const labels: Record<string,string> = { inbox:'收集箱',todo:'待办',in_progr
   <button class="suite-task-title" @click="ui.openEditTask(task.id)"><strong>{{ task.title }}</strong><small>{{ workspace.projects.value.find(p => p.id === task.projectId)?.name ?? '无项目' }} <span>·</span> {{ task.dueDate ?? '未安排日期' }} {{ task.dueTime }}</small></button>
   <span class="suite-status" :class="task.status">{{ labels[task.status] }}</span><span class="task-priority-label">{{task.priority==='high'?'高':task.priority==='medium'?'中':task.priority==='low'?'低':'无'}}</span>
   <button class="suite-icon" :aria-label="`编辑 ${task.title}`" @click="ui.openEditTask(task.id)"><UIcon name="i-lucide-ellipsis-vertical" /></button>
+  <button type="button" class="suite-task-delete" :aria-label="`删除 ${task.title}`" @click="ui.askDeleteTask(task.id)">删除</button>
 </article></template>
 <style scoped>
+.suite-task-delete{flex-shrink:0;padding:6px 8px;border:1px solid #efc8cc;border-radius:6px;background:#fff8f8;color:#bd3847;font:inherit;font-size:12px;cursor:pointer}
+.suite-task-delete:hover{background:#ffe8eb}
 .suite-task-row[data-priority]{border-left:4px solid var(--priority-color);background:var(--priority-bg)}
 [data-priority=none]{--priority-color:#98a2b3;--priority-bg:#fafbfc}
 [data-priority=low]{--priority-color:#4486dd;--priority-bg:#f2f7ff}

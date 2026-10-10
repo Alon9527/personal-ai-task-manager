@@ -1,4 +1,4 @@
-import { beforeEach, vi } from 'vitest'
+import { afterEach, beforeEach, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { createDemoWorkspace } from '../../app/data/demo-workspace'
 import { LocalWorkspaceGateway } from '../../app/data/local-workspace-gateway'
@@ -7,9 +7,13 @@ import QuarterPage from '../../app/pages/quarter.vue'
 
 describe('secondary dashboard pages', () => {
   beforeEach(() => {
+    // Keep the clock in the same quarter as this fixed demo fixture.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-15T04:00:00.000Z'))
     localStorage.clear()
     localStorage.setItem('personal-ai-workspace:v1', JSON.stringify(createDemoWorkspace()))
   })
+  afterEach(() => vi.useRealTimers())
 
   it('renders 2026-Q3 metrics and supports goal actions', async () => {
     const wrapper = await mountSuspended(QuarterPage)

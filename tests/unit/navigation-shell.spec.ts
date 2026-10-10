@@ -1,4 +1,4 @@
-import { beforeEach, vi } from 'vitest'
+import { afterEach, beforeEach, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { createDemoWorkspace } from '../../app/data/demo-workspace'
 import AppRail from '../../app/components/app/AppRail.vue'
@@ -6,9 +6,13 @@ import ProjectSidebar from '../../app/components/app/ProjectSidebar.vue'
 
 describe('real application navigation', () => {
   beforeEach(() => {
+    // The fixture contains Q3 goals; do not let the real calendar change it.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-15T04:00:00.000Z'))
     localStorage.clear()
     localStorage.setItem('personal-ai-workspace:v1', JSON.stringify(createDemoWorkspace()))
   })
+  afterEach(() => vi.useRealTimers())
 
   it('exposes the four primary routes from the application rail', async () => {
     const wrapper = await mountSuspended(AppRail)

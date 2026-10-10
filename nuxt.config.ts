@@ -19,6 +19,12 @@ export default defineNuxtConfig({
   },
   ignore: ['**/src-tauri/**'],
   modules: ['@nuxt/ui', '@nuxt/icon'],
+  // The packaged desktop has no Nuxt icon API and deliberately blocks remote
+  // requests. Scan app icons into the client bundle, including dynamic names.
+  icon: {
+    clientBundle: { scan: { globInclude: ['app/**/*.{vue,ts}'] } },
+    fallbackToApi: !isDesktop,
+  },
   runtimeConfig: {
     supabaseUrl: '',
     supabaseServiceRoleKey: '',

@@ -71,7 +71,10 @@ async function saveQuarterGoal(input: CreateQuarterGoalInput) {
 async function confirmDelete() {
   const request = ui.deleteRequest.value
   if (!request) return
-  if (request.kind === 'task') await workspace.deleteTask(request.id)
+  if (request.kind === 'task') {
+    await workspace.deleteTask(request.id)
+    if (ui.taskEditor.value.taskId === request.id) ui.closeTaskEditor()
+  }
   else if (request.kind === 'milestone') await workspace.deleteMilestone(request.id)
   else if (request.kind === 'quarter-goal') await workspace.deleteQuarterGoal(request.id)
   else await workspace.deleteProject(request.id)
@@ -88,6 +91,7 @@ async function confirmDelete() {
     :default-project-id="ui.taskEditor.value.defaultProjectId"
     :attachments-enabled="workspace.backendMode.value !== 'supabase'"
     @save="saveTask"
+    @delete="ui.askDeleteTask"
     @close="ui.closeTaskEditor"
   />
   <ProjectEditorDialog

@@ -29,6 +29,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   save: [input: CreateTaskInput]
+  delete: [id: string]
   close: []
 }>()
 
@@ -255,7 +256,12 @@ function toLocalDateTimeInput(value: string | null) {
             <small>TASK</small>
             <h2 id="task-editor-title">{{ task ? '编辑任务' : '新建任务' }}</h2>
           </div>
-          <div class="task-header-actions"><button type="button" class="secondary-action" @click="emit('close')">取消</button><button type="submit" :form="formId" class="primary-action" :disabled="attachmentBusy">{{ task ? '保存更改' : '创建任务' }}</button></div><button type="button" aria-label="关闭" @click="emit('close')"><UIcon name="i-lucide-x" /></button>
+          <div class="task-header-actions">
+            <button v-if="task" type="button" class="task-delete-action" data-delete-task @click="emit('delete', task.id)">删除任务</button>
+            <button type="button" class="secondary-action" @click="emit('close')">取消</button>
+            <button type="submit" :form="formId" class="primary-action" :disabled="attachmentBusy">{{ task ? '保存更改' : '创建任务' }}</button>
+          </div>
+          <button type="button" aria-label="关闭" @click="emit('close')"><UIcon name="i-lucide-x" /></button>
         </header>
 
         <form :id="formId" v-if="embedded" class="suite-compact-form" @submit.prevent="submit">
@@ -368,6 +374,13 @@ function toLocalDateTimeInput(value: string | null) {
 <style scoped>
 .task-editor .suite-date-fields{grid-template-columns:minmax(0,1fr)}
 .task-header-actions{display:flex;gap:8px;margin-left:auto}.task-header-actions button{width:auto;height:auto;padding:9px 14px;font-size:14px;white-space:nowrap}
+.task-delete-action{border:1px solid #efc8cc;border-radius:7px;background:#fff5f5;color:#bd3847;cursor:pointer}
+.task-delete-action:hover{background:#ffe8eb}
+.suite-inline-editor .task-editor>.dialog-header{display:grid;grid-template-columns:minmax(0,1fr) 30px;gap:12px}
+.suite-inline-editor .task-header-actions{grid-row:2;grid-column:1/-1;width:100%;margin:0}
+.suite-inline-editor .task-header-actions button{flex:1;padding:9px 8px}
+.suite-inline-editor .dialog-header>button{grid-column:2;grid-row:1}
+@media(max-width:600px){.task-editor>.dialog-header{display:grid;grid-template-columns:minmax(0,1fr) 30px;gap:12px}.task-header-actions{grid-row:2;grid-column:1/-1;width:100%;margin:0}.task-header-actions button{flex:1;padding:9px 8px}.task-editor>.dialog-header>button{grid-row:1;grid-column:2}}
 .task-editor .task-status-options input[type=radio]{width:1px!important;min-width:1px!important;height:1px!important;padding:0!important;border:0!important}
 .task-editor .task-status-options span [class*=icon]{border:0;padding:0;min-height:0;background:transparent;box-shadow:none}
 .task-editor{max-height:calc(100dvh - 36px)}

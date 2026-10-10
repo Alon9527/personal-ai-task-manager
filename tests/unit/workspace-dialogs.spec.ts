@@ -60,6 +60,21 @@ const existingTask = {
 } as const
 
 describe('workspace editors', () => {
+  it.each([false, true])('requests deletion only for a saved task without saving or closing (embedded=%s)', async (embedded) => {
+    const wrapper = await mountSuspended(TaskEditorDialog, {
+      props: { open: true, task: existingTask, projects: [], embedded },
+      global: { stubs: { Teleport: true } },
+    })
+    const button = wrapper.get('.dialog-header [data-delete-task]')
+    expect(button.attributes('type')).toBe('button')
+    await button.trigger('click')
+    expect(wrapper.emitted('delete')).toEqual([[existingTask.id]])
+    expect(wrapper.emitted('save')).toBeUndefined()
+    expect(wrapper.emitted('close')).toBeUndefined()
+    await wrapper.setProps({ task: null })
+    expect(wrapper.find('[data-delete-task]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('downloads stored files as resolved content and reports unavailable content', async () => {
     const id = '40000000-0000-4000-8000-000000000001'
     attachmentInvoke.mockResolvedValue('data:application/pdf;base64,AQID')
