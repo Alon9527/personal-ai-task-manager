@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { aiErrorMessage, createAiGeneration, isPendingAiPlan, saveAiProposal } from '../../services/ai-generation'
 import { loadAiModelTarget, saveAiModelTarget, DEFAULT_AI_MODEL_TARGET } from '../../services/ai-model-target'
 import type { AiModelTarget } from '../../services/ai-model-target'
-import { MINIMAX_MODELS } from '../../services/minimax-model'
+import { MINIMAX_MODELS, supportsMiniMaxImages } from '../../services/minimax-model'
 import { listModelProviders } from '../../services/model-provider'
 import type { ModelProviderProfile } from '../../services/model-provider'
 import type { AgentAction } from '../../services/agent-plan-schema'
@@ -54,8 +54,8 @@ async function generate(mode: 'plan' | 'message' = 'plan'){
  if(mode==='message'&&!prompt.value.trim()&&!images.value.length)return
  if(mode==='plan'&&pending.value){error.value='请先审阅现有计划；也可以在下方继续提问，原计划不会被覆盖。';return}
  if(images.value.length && !allowImages.value){error.value='请先确认允许把这些图片发送给所选模型。';return}
- if(images.value.length && target.value.kind!=='custom'){error.value='图片分析请选择支持视觉的 OpenAI 兼容模型；当前内置 MiniMax 接入未启用图片输入。';return}
- const question=prompt.value.trim() || (inbox.value?'请将这些收集箱记录整理成可执行任务，建议重要性、项目归属和日期。请更新已有任务，不重复创建。':'请为今天提出可执行的日程安排，考虑任务重要性、截止日期和预计时长。不要直接执行。')
+ if(images.value.length && target.value.kind==='minimax' && !supportsMiniMaxImages(target.value.modelId)){error.value='当前 MiniMax 模型不支持图片分析，请切换 M3.1 Flash、M3 或支持视觉的 OpenAI 兼容模型。';return}
+ const question=prompt.value.trim() || (images.value.length?'请分析这些图片中的待办或已完成事项，提出新增任务或更新已有任务的建议；无法明确匹配时先询问。等我确认后再修改任务。':inbox.value?'请将这些收集箱记录整理成可执行任务，建议重要性、项目归属和日期。请更新已有任务，不重复创建。':'请为今天提出可执行的日程安排，考虑任务重要性、截止日期和预计时长。不要直接执行。')
  if(mode==='plan'&&inbox.value&&!selectedIds.value.length&&!images.value.length){error.value='请先选择要整理的记录，或添加图片。';return}
  const submittedPrompt=prompt.value
  if(mode==='message')addMessage('user',question)

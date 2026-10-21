@@ -12,7 +12,7 @@ describe('MiniMax model selection', () => {
     expect(MINIMAX_MODELS[0]).toEqual({
       id: 'MiniMax-M3.1-Flash',
       label: 'M3.1 Flash',
-      description: '新一代模型，支持百万上下文；本入口用于文本任务规划',
+      description: '支持图片分析、百万上下文与任务规划',
     })
     expect(DEFAULT_MINIMAX_MODEL).toBe('MiniMax-M3')
     expect(MINIMAX_MODELS.map(option => option.id)).toContain('MiniMax-M2.7-highspeed')

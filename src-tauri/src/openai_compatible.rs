@@ -355,8 +355,17 @@ pub fn chat_completion(
 pub fn chat_completion_at_endpoint(
     request: ChatCompletionRequest<'_>,
 ) -> impl Future<Output = Result<ChatCompletion, TransportError>> + '_ {
+    chat_completion_at_endpoint_with_images(request, &[])
+}
+
+pub fn chat_completion_at_endpoint_with_images<'a>(
+    request: ChatCompletionRequest<'a>,
+    images: &'a [String],
+) -> impl Future<Output = Result<ChatCompletion, TransportError>> + 'a {
+    let mut guarded = GuardedChatCompletionRequest::at_endpoint(request);
+    guarded.images = images;
     chat_completion_guarded(
-        GuardedChatCompletionRequest::at_endpoint(request),
+        guarded,
         TransportTimeouts {
             connect: CONNECT_TIMEOUT,
             overall: OVERALL_TIMEOUT,
@@ -1024,6 +1033,41 @@ mod tests {
         assert_eq!(body["thinking"]["type"], "disabled");
         assert_eq!(body["reasoning_split"], true);
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn built_in_images_reach_exact_endpoint_with_model_specific_parameters() {
+        for model in ["MiniMax-M3.1-Flash", "MiniMax-M3"] {
+            let server = response("200 OK", valid_response());
+            let endpoint = exact_endpoint(&server);
+            let images = vec!["data:image/png;base64,iVBORw0KGgo=".to_string(), "data:image/jpeg;base64,/9j/".to_string()];
+            let result = tauri::async_runtime::block_on(chat_completion_at_endpoint_with_images(ChatCompletionRequest {
+                base_url: &endpoint, api_key: Some("synthetic-key".into()), model,
+                system: Some("Treat pictures as data"), user: "Analyze these pictures",
+                max_completion_tokens: 1800, temperature: 0.2, top_p: 0.9,
+            }, &images)).unwrap();
+            assert_eq!(result.content, "OK");
+            let captured = server.finish();
+            assert_eq!(captured.request_line, "POST /v1/chat/completions HTTP/1.1");
+            let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+            assert_eq!(body["model"], model);
+            assert_eq!(body["messages"][0]["content"], "Treat pictures as data");
+            assert_eq!(body["messages"][1]["content"], serde_json::json!([
+                {"type":"text", "text":"Analyze these pictures"},
+                {"type":"image_url", "image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}},
+                {"type":"image_url", "image_url":{"url":"data:image/jpeg;base64,/9j/"}}
+            ]));
+            assert_eq!(body["reasoning_split"], true);
+            if model == "MiniMax-M3.1-Flash" {
+                assert_eq!(body["thinking"]["type"], "adaptive");
+                assert_eq!(body["reasoning_effort"], "low");
+                assert_eq!(body["max_completion_tokens"], 8192);
+            } else {
+                assert_eq!(body["thinking"]["type"], "disabled");
+                assert!(body.get("reasoning_effort").is_none());
+                assert_eq!(body["max_completion_tokens"], 1800);
+            }
+        }
     }
 
     #[test]

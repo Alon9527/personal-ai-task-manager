@@ -9,7 +9,106 @@ vi.mock('../../app/composables/useAgentPlan',()=>({useAgentPlan:()=>injected.pla
 vi.mock('../../app/services/minimax',async(load)=>({...await load<typeof import('../../app/services/minimax')>(),askAi:injected.ask}))
 vi.mock('../../app/services/model-provider',()=>({listModelProviders:async()=>({profiles:[],pendingCredentialDeletes:[]})}))
 import SuiteAiPanel from '../../app/components/suite/SuiteAiPanel.vue'
+import { saveAiModelTarget } from '../../app/services/ai-model-target'
 let response:any
+const imageData = 'data:image/png;base64,iVBORw0KGgo='
+function pngFile(name = 'test.png') {
+ return new File([new Uint8Array([137,80,78,71,13,10,26,10])], name, { type: 'image/png' })
+}
+async function attachImages(wrapper: Awaited<ReturnType<typeof mountSuspended>>, files: File[]) {
+ const input = wrapper.get('input[type="file"]')
+ Object.defineProperty(input.element, 'files', { value: files, configurable: true })
+ await input.trigger('change'); await flushPromises()
+}
+it.each(['MiniMax-M3.1-Flash', 'MiniMax-M3'])('sends images to %s only after consent and keeps task changes pending', async modelId => {
+ saveAiModelTarget({ kind: 'minimax', modelId })
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ await attachImages(wrapper, [pngFile()])
+ expect(wrapper.get('.ai-image-preview img').attributes('src')).toBe(imageData)
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(injected.ask).not.toHaveBeenCalled()
+ expect(wrapper.get('[role="alert"]').text()).toContain('允许')
+ await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(injected.ask).toHaveBeenCalledWith(expect.any(Object), expect.any(String), { kind:'minimax', modelId }, [imageData])
+ expect(injected.ask.mock.calls[0][1]).toContain('图片')
+ expect(wrapper.get('.suite-plan-card').text()).toContain('09:30')
+ expect(injected.plan.requestExecution).not.toHaveBeenCalled()
+ expect(injected.workspace.updateTask).not.toHaveBeenCalled()
+ wrapper.unmount()
+})
+
+it('blocks old MiniMax image requests but still allows text requests', async () => {
+ saveAiModelTarget({ kind:'minimax', modelId:'MiniMax-M2.7' })
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises(); await attachImages(wrapper, [pngFile()])
+ await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(injected.ask).not.toHaveBeenCalled()
+ expect(wrapper.get('[role="alert"]').text()).toContain('M3.1 Flash')
+ await wrapper.get('[aria-label="移除图片 test.png"]').trigger('click')
+ await wrapper.get('[aria-label="AI 计划要求"]').setValue('先做什么？')
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(injected.ask).toHaveBeenCalledWith(expect.any(Object), '先做什么？', { kind:'minimax', modelId:'MiniMax-M2.7' })
+ wrapper.unmount()
+})
+
+it('revokes image consent when changing models or adding another picture', async () => {
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises(); await attachImages(wrapper, [pngFile()])
+ await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
+ await wrapper.get('[aria-label="选择 AI 模型"]').setValue('minimax:MiniMax-M3.1-Flash')
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(injected.ask).not.toHaveBeenCalled()
+ expect((wrapper.get('.ai-image-input input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
+ await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
+ await attachImages(wrapper, [pngFile('second.png')])
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(injected.ask).not.toHaveBeenCalled()
+ expect(wrapper.findAll('.ai-image-preview')).toHaveLength(2)
+ wrapper.unmount()
+})
+
+it('accepts a clipboard image without sending it until consent and submit', async () => {
+ const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
+ await flushPromises()
+ const event = new Event('paste', { bubbles: true, cancelable: true })
+ Object.defineProperty(event, 'clipboardData', { value: { items:[{ kind:'file', type:'image/png', getAsFile:()=>pngFile() }] } })
+ wrapper.element.dispatchEvent(event); await flushPromises()
+ expect(event.defaultPrevented).toBe(true)
+ expect(wrapper.get('.ai-image-preview img').attributes('src')).toBe(imageData)
+ expect(injected.ask).not.toHaveBeenCalled()
+ wrapper.unmount()
+})
+
+it.each([
+ { files:()=>[new File(['gif'], 'a.gif', {type:'image/gif'})], reason:'PNG' },
+ { files:()=>Array.from({length:5}, (_,i)=>pngFile(`a${i}.png`)), reason:'4 张' },
+ { files:()=>[new File([new Uint8Array(5*1024*1024+1)], 'large.png', {type:'image/png'})], reason:'5 MB' },
+ { files:()=>[new File([new Uint8Array(5*1024*1024)], 'a.png', {type:'image/png'}), new File([new Uint8Array(4*1024*1024)], 'b.png', {type:'image/png'})], reason:'8 MB' },
+])('rejects invalid image input before model submission: $reason', async ({files,reason}) => {
+ const wrapper=await mountSuspended(SuiteAiPanel,{global:{stubs:{VoiceInputButton:true}}})
+ await flushPromises(); await attachImages(wrapper,files())
+ expect(wrapper.get('[role="alert"]').text()).toContain(reason)
+ expect(wrapper.findAll('.ai-image-preview')).toHaveLength(0)
+ expect(injected.ask).not.toHaveBeenCalled()
+ wrapper.unmount()
+})
+
+it('keeps consented images and input after a model failure for an explicit retry', async () => {
+ injected.ask.mockRejectedValue(new Error('合成网络错误'))
+ const wrapper=await mountSuspended(SuiteAiPanel,{global:{stubs:{VoiceInputButton:true}}})
+ await flushPromises(); await attachImages(wrapper,[pngFile()])
+ await wrapper.get('[aria-label="AI 计划要求"]').setValue('分析图中任务')
+ await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
+ await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
+ expect(wrapper.get('[role="alert"]').text()).toContain('合成网络错误')
+ expect(wrapper.get('.ai-image-preview img').attributes('src')).toBe(imageData)
+ expect((wrapper.get('[aria-label="AI 计划要求"]').element as HTMLInputElement).value).toBe('分析图中任务')
+ expect(injected.plan.requestExecution).not.toHaveBeenCalled()
+ wrapper.unmount()
+})
 it('shows native model errors instead of swallowing the reason',async()=>{
  injected.ask.mockRejectedValue('模型回答格式不正确：示例错误')
  const wrapper=await mountSuspended(SuiteAiPanel,{global:{stubs:{VoiceInputButton:true}}});await flushPromises()
