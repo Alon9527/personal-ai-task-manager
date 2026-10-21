@@ -1,8 +1,9 @@
 import { z } from 'zod'
 
 export const MINIMAX_MODELS = [
-  { id: 'MiniMax-M3', label: 'M3', description: '最新旗舰 Agent 模型，支持超长上下文与复杂规划' },
-  { id: 'MiniMax-M2.7', label: 'M2.7', description: '最新通用模型，适合规划与 Agent 操作' },
+  { id: 'MiniMax-M3.1-Flash', label: 'M3.1 Flash', description: '新一代模型，支持百万上下文；本入口用于文本任务规划' },
+  { id: 'MiniMax-M3', label: 'M3', description: 'Agent 模型，支持超长上下文与复杂规划' },
+  { id: 'MiniMax-M2.7', label: 'M2.7', description: '通用模型，适合规划与 Agent 操作' },
   { id: 'MiniMax-M2.7-highspeed', label: 'M2.7 高速版', description: '更快响应，需要对应高速套餐' },
   { id: 'MiniMax-M2.5', label: 'M2.5', description: '稳定的工具调用与办公任务能力' },
   { id: 'MiniMax-M2.5-highspeed', label: 'M2.5 高速版', description: 'M2.5 低延迟版本，需要对应套餐' },

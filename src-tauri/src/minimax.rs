@@ -1032,6 +1032,7 @@ fn resolve_sources(ids: &[String], context: &WorkspaceContext) -> Result<Vec<Sou
 
 fn validate_model(value: &str) -> Result<&'static str, String> {
     match value {
+        "MiniMax-M3.1-Flash" => Ok("MiniMax-M3.1-Flash"),
         "MiniMax-M3" => Ok("MiniMax-M3"),
         "MiniMax-M2.7" => Ok("MiniMax-M2.7"),
         "MiniMax-M2.7-highspeed" => Ok("MiniMax-M2.7-highspeed"),
@@ -1864,6 +1865,7 @@ mod tests {
     #[test]
     fn accepts_only_reviewed_models() {
         for model in [
+            "MiniMax-M3.1-Flash",
             "MiniMax-M3",
             "MiniMax-M2.7",
             "MiniMax-M2.7-highspeed",
@@ -1876,6 +1878,8 @@ mod tests {
             assert_eq!(validate_model(model).unwrap(), model);
         }
         assert!(validate_model("MiniMax-M3-highspeed").is_err());
+        assert!(validate_model("MiniMax-M3.1").is_err());
+        assert!(validate_model("MiniMax-M3.1-Flash-highspeed").is_err());
         assert!(validate_model("unknown-model").is_err());
     }
 

@@ -20,6 +20,14 @@ describe('AI model target selection', () => {
     })
   })
 
+  it('persists the new Flash target while keeping existing M3 selections unchanged', () => {
+    saveAiModelTarget({ kind: 'minimax', modelId: 'MiniMax-M3' })
+    expect(loadAiModelTarget()).toEqual({ kind: 'minimax', modelId: 'MiniMax-M3' })
+    const flash = { kind: 'minimax', modelId: 'MiniMax-M3.1-Flash' }
+    expect(saveAiModelTarget(flash)).toEqual(flash)
+    expect(loadAiModelTarget()).toEqual(flash)
+  })
+
   it('migrates a valid legacy MiniMax model without replacing it with the new default', () => {
     localStorage.setItem(MINIMAX_MODEL_STORAGE_KEY, 'MiniMax-M2.7')
 
