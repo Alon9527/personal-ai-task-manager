@@ -294,6 +294,8 @@ struct CompletionPayload<'a> {
     thinking: Option<ThinkingControl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_split: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -428,15 +430,19 @@ async fn chat_completion_guarded(
         role: "user",
         content: user_content(request.user, request.images),
     });
+    // M3.1 Flash rejects disabled thinking. Its reasoning shares the output
+    // budget, so leave room for the answer without changing other providers.
+    let adaptive_flash = request.exact_endpoint && request.model == "MiniMax-M3.1-Flash";
     let payload = CompletionPayload {
         model: request.model,
         messages,
         stream: false,
-        max_completion_tokens: request.max_completion_tokens,
+        max_completion_tokens: if adaptive_flash { request.max_completion_tokens.max(8192) } else { request.max_completion_tokens },
         temperature: request.temperature,
         top_p: request.top_p,
-        thinking: request.exact_endpoint.then_some(ThinkingControl { r#type: "disabled" }),
+        thinking: request.exact_endpoint.then_some(ThinkingControl { r#type: if adaptive_flash { "adaptive" } else { "disabled" } }),
         reasoning_split: request.exact_endpoint.then_some(true),
+        reasoning_effort: adaptive_flash.then_some("low"),
     };
     send_payload_with_hook(
         request.base_url,
@@ -986,14 +992,18 @@ mod tests {
     }
 
     fn call_exact(server: &TestServer, api_key: Option<&str>) -> Result<ChatCompletion, TransportError> {
+        call_exact_model(server, api_key, "MiniMax-M3", 1800)
+    }
+
+    fn call_exact_model(server: &TestServer, api_key: Option<&str>, model: &str, max_completion_tokens: u16) -> Result<ChatCompletion, TransportError> {
         let endpoint = exact_endpoint(server);
         tauri::async_runtime::block_on(chat_completion_at_endpoint(ChatCompletionRequest {
             base_url: &endpoint,
             api_key: api_key.map(str::to_string),
-            model: "MiniMax-M3",
+            model,
             system: Some("Synthetic MiniMax system prompt"),
             user: "Synthetic MiniMax user prompt",
-            max_completion_tokens: 1800,
+            max_completion_tokens,
             temperature: 0.2,
             top_p: 0.9,
         }))
@@ -1013,6 +1023,53 @@ mod tests {
         assert_eq!(body["top_p"], 0.9);
         assert_eq!(body["thinking"]["type"], "disabled");
         assert_eq!(body["reasoning_split"], true);
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn flash_completion_never_disables_required_thinking() {
+        let server = response("200 OK", br#"{"choices":[{"finish_reason":"stop","message":{"content":"OK","reasoning_content":"Internal reasoning is not the answer"}}]}"#.to_vec());
+        let result = call_exact_model(&server, Some("synthetic-built-in-secret"), "MiniMax-M3.1-Flash", 1800).unwrap();
+        let captured = server.finish();
+        let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(body["reasoning_split"], true);
+        assert_eq!(body["model"], "MiniMax-M3.1-Flash");
+        assert_eq!(captured.request_line, "POST /v1/chat/completions HTTP/1.1");
+        assert_eq!(result.content, "OK");
+    }
+
+    #[test]
+    fn flash_completion_reserves_thinking_budget_without_shrinking_larger_answers() {
+        for (requested, expected) in [(1800, 8192), (6000, 8192), (12000, 12000)] {
+            let server = response("200 OK", valid_response());
+            call_exact_model(&server, None, "MiniMax-M3.1-Flash", requested).unwrap();
+            let captured = server.finish();
+            let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+            assert_eq!(body["max_completion_tokens"], expected);
+        }
+    }
+
+    #[test]
+    fn custom_flash_completion_keeps_provider_neutral_parameters() {
+        let server = response("200 OK", valid_response());
+        tauri::async_runtime::block_on(chat_completion_with_images(ChatCompletionRequest {
+            base_url: &server.base_url,
+            api_key: None,
+            model: "MiniMax-M3.1-Flash",
+            system: None,
+            user: "Synthetic prompt",
+            max_completion_tokens: 1800,
+            temperature: 0.2,
+            top_p: 0.9,
+        }, &[])).unwrap();
+        let captured = server.finish();
+        let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("reasoning_split").is_none());
+        assert_eq!(body["max_completion_tokens"], 1800);
     }
 
     #[test]
