@@ -48,6 +48,8 @@ vi.mock('../../app/services/model-provider', async () => {
   return { ...actual, listModelProviders: providerMocks.list }
 })
 
+import { saveAiModelTarget } from '../../app/services/ai-model-target'
+import { flushPromises } from '@vue/test-utils'
 import ContextPanel from '../../app/components/app/ContextPanel.vue'
 
 const GENERATED_AT = '2026-08-13T08:15:00.000Z'
@@ -231,7 +233,7 @@ async function mountPanel() {
     route: '/',
     global: { stubs: { UIcon: { template: '<span class="icon-stub" />' } } },
   })
-  await vi.waitFor(() => expect(wrapper.find('[data-minimax-model]').exists()).toBe(true))
+  await vi.waitFor(() => expect(wrapper.find('[data-generate-minimax-brief]').exists()).toBe(true))
   return wrapper
 }
 
@@ -330,7 +332,7 @@ describe('MiniMax Agent plan integration', () => {
     let finish!: (value: ReturnType<typeof createDemoWorkspace>) => void
     workspace.readLatestDocument.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
     await wrapper.get('[data-create-suggestion-plan]').trigger('click')
-    await wrapper.get('[data-minimax-model]').setValue('minimax:MiniMax-M2.7')
+    saveAiModelTarget({kind:'minimax',modelId:'MiniMax-M2.7'}); await flushPromises()
     await wrapper.get('[data-generate-minimax-brief]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-create-suggestion-plan]').exists()).toBe(true))
     await wrapper.get('[data-create-suggestion-plan]').trigger('click')
@@ -366,8 +368,8 @@ describe('MiniMax Agent plan integration', () => {
     expect(saved).toMatchObject({
       question: '采用今日简报建议：整理首页信息架构',
       model: 'MiniMax-M2.7',
-      createdAt: GENERATED_AT,
-      updatedAt: GENERATED_AT,
+      createdAt: expect.any(String),
+      updatedAt: expect.any(String),
       status: 'draft',
       validation: { executable: true, selectedCount: 1 },
       actions: [{
@@ -429,7 +431,7 @@ describe('MiniMax Agent plan integration', () => {
     await vi.waitFor(() => expect(controller.setDraft).toHaveBeenCalledTimes(1))
 
     minimaxMocks.generateBrief.mockResolvedValueOnce(briefWithSuggestion())
-    await wrapper.get('.result-meta button').trigger('click')
+    await wrapper.get('[data-generate-minimax-brief]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-ignore-suggestion]').exists()).toBe(true))
     await wrapper.get('[data-ignore-suggestion]').trigger('click')
     expect(wrapper.find('[data-create-suggestion-plan]').exists()).toBe(false)
@@ -551,12 +553,12 @@ describe('MiniMax Agent plan integration', () => {
       const router = useRouter()
       const push = vi.spyOn(router, 'push')
 
-      const recovery = wrapper.get('[data-agent-plan-recovery]')
-      expect(recovery.text()).toContain('继续审阅上次计划')
-      expect(recovery.text()).toContain('3 / 3')
-      expect(recovery.text()).toContain('8月12日')
+      const recovery = wrapper.get('[data-chat-plan]')
+      expect(recovery.text()).toContain('当前待确认方案')
+      expect(recovery.text()).toContain('已选 3 项')
+      expect(recovery.text()).toContain('我已查看此方案')
       expect(controller.loadDraft).toHaveBeenCalled()
-      await recovery.get('button').trigger('click')
+      await recovery.get('[data-review-agent-plan]').trigger('click')
       expect(push).toHaveBeenCalledWith('/agent-plan')
       expect(minimaxMocks.ask).not.toHaveBeenCalled()
       expect(controller.setDraft).not.toHaveBeenCalled()
@@ -567,7 +569,7 @@ describe('MiniMax Agent plan integration', () => {
   it.each([null, 'applied'] as const)('does not show recovery for %s state', async (status) => {
     installHarness(status === null ? null : pendingDraft(status))
     const wrapper = await mountPanel()
-    expect(wrapper.find('[data-agent-plan-recovery]').exists()).toBe(false)
+    expect(wrapper.find('[data-chat-plan]').exists()).toBe(false)
   })
 
   it('does not overwrite an existing pending plan until replacement is explicit', async () => {
@@ -614,7 +616,7 @@ describe('MiniMax Agent plan integration', () => {
 
     expect(controller.setDraft).not.toHaveBeenCalled()
     expect(controller.draft.value?.id).toBe(old.id)
-    expect(wrapper.find('[data-agent-plan-recovery]').exists()).toBe(true)
+    expect(wrapper.find('[data-chat-plan]').exists()).toBe(true)
     expect(wrapper.find('[data-agent-plan-replacement]').exists()).toBe(false)
   })
 

@@ -16,12 +16,17 @@ export const conversationRequestSchema = z.object({
   ]).optional(),
 }).strict()
 export type ConversationRequest = z.input<typeof conversationRequestSchema>
+const briefDisplaySchema = z.object({
+  sources: z.array(z.object({ taskId:z.string().max(100), title:z.string().max(1000), projectName:z.string().max(1000).nullable() }).strict()).max(80),
+  suggestion: z.object({ title:z.string().min(1).max(1000), description:z.string().max(6000), rationale:z.string().max(3000), projectId:z.string().nullable(), priority:z.enum(['low','medium','high']).nullable(), dueDate:z.string().nullable(), dueTime:z.string().nullable(), isFocus:z.boolean() }).strict().nullable(),
+}).strict()
 const messageSchema = z.object({
   id: z.string().uuid(), role: z.enum(['user', 'assistant', 'system']), text: z.string().min(1).max(16000),
   at: z.string().datetime(), status: z.enum(['pending', 'ready', 'failed']).default('ready'), error: z.string().max(2000).optional(),
   model: z.string().max(160).optional(), sourceCount: z.number().int().nonnegative().optional(), tokens: z.number().int().nonnegative().optional(),
   imageCount: z.number().int().min(0).max(4).optional(),
   plan: agentPlanDraftSchema.optional(), planLabels: z.array(z.string().max(1500)).max(30).optional(), receiptPlanId: z.string().uuid().optional(),
+  brief: briefDisplaySchema.optional(),
 }).strict()
 export type ConversationMessage = z.infer<typeof messageSchema>
 const stateSchema = z.object({
@@ -109,7 +114,7 @@ export function createAgentConversation(disk?: Disk) {
   function failTurn(id: string, cause: string) {
     save({ ...state.value, messages: state.value.messages.map(m => m.id === id ? { ...m, status: 'failed', error: cause.slice(0, 2000) } : m) })
   }
-  function finishTurn(id: string, text: string, metadata: { model?: string, sourceCount?: number, tokens?: number, plan?: AgentPlanDraftV1, planLabels?: string[] } = {}) {
+  function finishTurn(id: string, text: string, metadata: { model?: string, sourceCount?: number, tokens?: number, plan?: AgentPlanDraftV1, planLabels?: string[], brief?: z.infer<typeof briefDisplaySchema> } = {}) {
     const assistant = messageSchema.parse({ id: crypto.randomUUID(), role: 'assistant', text, status: 'ready', at: new Date().toISOString(), ...metadata })
     save({ ...state.value, messages: [...state.value.messages.map(m => m.id === id ? { ...m, status: 'ready' as const, error: undefined } : m), assistant] })
   }

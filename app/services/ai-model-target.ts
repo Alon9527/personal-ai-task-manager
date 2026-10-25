@@ -72,6 +72,7 @@ export function saveAiModelTarget(
 ): AiModelTarget {
   const parsed = aiModelTargetSchema.parse(target)
   storage.setItem(AI_MODEL_SELECTION_KEY, JSON.stringify(parsed))
+  if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event('focus-ai-model-changed'))
   return parsed
 }
 

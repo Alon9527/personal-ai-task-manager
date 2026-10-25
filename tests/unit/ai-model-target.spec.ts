@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   AI_MODEL_SELECTION_KEY,
   DEFAULT_AI_MODEL_TARGET,
@@ -65,4 +65,11 @@ describe('AI model target selection', () => {
     expect(() => saveAiModelTarget({ kind: 'custom', profileId: 'not-a-uuid' })).toThrow()
     expect(localStorage.getItem(AI_MODEL_SELECTION_KEY)).toBeNull()
   })
+})
+it('notifies mounted panels when settings save a model selection', () => {
+  const listener = vi.fn()
+  window.addEventListener('focus-ai-model-changed', listener)
+  saveAiModelTarget({kind:'minimax',modelId:'MiniMax-M3'})
+  expect(listener).toHaveBeenCalledOnce()
+  window.removeEventListener('focus-ai-model-changed', listener)
 })

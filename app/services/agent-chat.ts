@@ -2,10 +2,11 @@ import { computed, ref } from 'vue'
 import type { WorkspaceDocument } from '#shared/workspace'
 import type { createAgentPlanController } from '../composables/useAgentPlan'
 import { createAgentConversation, conversationHistory, isExplicitConfirmation, planContentRevision } from './agent-conversation'
-import { aiErrorMessage, createAiGeneration, isPendingAiPlan, saveAiProposal } from './ai-generation'
+import { aiErrorMessage, buildAiPlanDraft, createAiGeneration, isPendingAiPlan, saveAiProposal } from './ai-generation'
 import type { AiModelTarget } from './ai-model-target'
 import type { ConversationRequest } from './agent-conversation'
 import type { AgentPlanDraftV1 } from './agent-plan-schema'
+import { actionLabel } from './agent-action-display'
 
 type Ask = ReturnType<typeof createAiGeneration>['ask']
 type Send = Parameters<Ask>[0]
@@ -14,13 +15,14 @@ type Dependencies = {
   plan: ReturnType<typeof createAgentPlanController>
   readDocument: () => Promise<WorkspaceDocument>
   ask: Ask
+  brief?: ReturnType<typeof createAiGeneration>['brief']
   fingerprint: (target: AiModelTarget) => Promise<string>
   invalidate?: () => void
   connectionGuard?: (key: string) => ConversationRequest['connectionGuard']
 }
 
 /** Shared conversation coordinator. Only explicit, bound confirmation can write data. */
-export function createAgentChat({ log, plan, readDocument, ask, fingerprint, invalidate, connectionGuard }: Dependencies) {
+export function createAgentChat({ log, plan, readDocument, ask, brief, fingerprint, invalidate, connectionGuard }: Dependencies) {
   const busy = ref(false), error = ref('')
   const consent = ref<string | null>(null)
   const readyToDisplay = ref<string | null>(null)
@@ -31,9 +33,7 @@ export function createAgentChat({ log, plan, readDocument, ask, fingerprint, inv
   let activeTurn: string | undefined
   let confirming = false
   function planLabels(draft: AgentPlanDraftV1, document: WorkspaceDocument) {
-    return draft.actions.map(a => a.type === 'renameQuarterGoal'
-      ? `${document.quarterGoals.find(g => g.id === a.targetId)?.quarter ?? ''}「${document.quarterGoals.find(g => g.id === a.targetId)?.title ?? a.targetId}」→「${a.payload.title}」`
-      : `${a.type} · ${a.targetId ?? a.draftRef ?? ''} · ${a.reason.slice(0, 300)}`)
+    return draft.actions.map(a => actionLabel(a, document))
   }
   plan.subscribeExecution?.({
     before() { log.load(); log.assertRoom() },
@@ -134,12 +134,81 @@ export function createAgentChat({ log, plan, readDocument, ask, fingerprint, inv
       }
       return true
     } catch (cause) {
+      if (token !== epoch || session !== log.state.value.id) return false
       error.value = aiErrorMessage(cause)
       if (turn && session === log.state.value.id) {
         try { log.failTurn(turn, error.value) } catch { /* Original history remains intact. */ }
       }
       return false
     } finally { if (token === epoch) { busy.value = false; activeTurn = undefined } }
+  }
+  async function generateBrief(target: AiModelTarget) {
+    load()
+    if (!brief || busy.value || plan.executing.value) return false
+    busy.value = true; error.value = ''
+    const token = ++epoch, session = log.state.value.id
+    let turn: string | undefined
+    try {
+      const key = await fingerprint(target)
+      if (token !== epoch || session !== log.state.value.id) return false
+      if (log.needsConsent(key)) { consent.value = key; error.value = '模型或连接已变化，请先确认是否继续使用这个模型。'; return false }
+      consent.value = null
+      turn = log.beginTurn('生成今日简报', key); activeTurn = turn
+      const outcome = await brief(target)
+      if (token !== epoch || session !== log.state.value.id) return false
+      if (await fingerprint(target) !== key) throw new Error('模型连接在回复期间已变化，本次简报未采用，请重试。')
+      if (token !== epoch || session !== log.state.value.id) return false
+      if (!outcome?.isCurrent()) throw new Error('请求已中断，请重试。')
+      if (outcome.status === 'failed') throw new Error(outcome.error)
+      const b = outcome.value
+      log.finishTurn(turn, ['今日简报', b.focus, ...b.progress.map(p => p.text), ...(b.suggestion ? [`建议：${b.suggestion.title}`, b.suggestion.rationale] : [])].join('\n\n'),
+        {model:b.model,sourceCount:b.sources.length,tokens:b.usage?.totalTokens,brief:{sources:b.sources,suggestion:b.suggestion}})
+      return true
+    } catch (cause) {
+      if (token !== epoch || session !== log.state.value.id) return false
+      error.value = aiErrorMessage(cause)
+      if (turn && session === log.state.value.id) { try { log.failTurn(turn,error.value) } catch { /* Preserve history. */ } }
+      return false
+    } finally { if(token===epoch){busy.value=false;activeTurn=undefined} }
+  }
+  function isBriefSuggestionUsed(messageId: string) {
+    const actionId = `brief:${messageId}`
+    const contains = (draft: AgentPlanDraftV1 | null | undefined) => Boolean(draft?.actions.some(a => a.actionId === actionId))
+    if (contains(pending.value) || contains(log.state.value.candidate?.draft)) return true
+    if (plan.draft.value?.status === 'applied' && contains(plan.draft.value)) return true
+    const receipts = new Set(log.messages.value.map(m=>m.receiptPlanId).filter(Boolean))
+    return log.messages.value.some(m=>m.plan && receipts.has(m.plan.id) && contains(m.plan))
+  }
+  async function suggestBrief(messageId: string) {
+    load()
+    if (busy.value || plan.executing.value) return false
+    const message = log.messages.value.find(m=>m.id===messageId)
+    const suggestion = message?.brief?.suggestion
+    if (!suggestion || !message) return false
+    const actionId = `brief:${messageId}`
+    if (isBriefSuggestionUsed(messageId)) { error.value='这条建议已有待处理或已执行方案，不能重复生成。'; return false }
+    busy.value=true; error.value=''
+    const token=++epoch, session=log.state.value.id
+    const previous=pending.value, baseRevision=previous ? JSON.stringify(previous) : 'null'
+    try {
+      const document=await readDocument()
+      if(token!==epoch || session!==log.state.value.id) return false
+      if(JSON.stringify(pending.value)!==baseRevision) throw new Error('计划已变化，请重新审阅。')
+      const question=`采用今日简报建议：${suggestion.title}`
+      const draft=buildAiPlanDraft({ answer:message.text,model:message.model ?? 'AI',generatedAt:new Date().toISOString(),usage:null,sources:message.brief!.sources,
+        actions:[{actionId,type:'createTask',reason:suggestion.rationale,selected:true,dangerous:false,draftRef:'task:daily-brief-suggestion',payload:{title:suggestion.title,description:suggestion.description,projectId:suggestion.projectId ? {kind:'existing',id:suggestion.projectId} : null,milestoneId:null,priority:suggestion.priority,dueDate:suggestion.dueDate,dueTime:suggestion.dueTime,isFocus:suggestion.isFocus}}],
+      },question,document)
+      log.assertRoom()
+      const turn=log.append('user',question)
+      log.finishTurn(turn,'已生成建议方案，请审阅后确认。',{plan:draft,planLabels:planLabels(draft,document)})
+      if(previous) log.propose(draft,baseRevision)
+      else {
+        try { saveAiProposal(plan,draft) } catch(cause) { log.propose(draft,'null'); throw cause }
+        log.associate(plan.draft.value!); readyToDisplay.value=planContentRevision(plan.draft.value!)
+      }
+      return true
+    } catch(cause) { if(token===epoch && session===log.state.value.id)error.value=aiErrorMessage(cause);return false }
+    finally { if(token===epoch) busy.value=false }
   }
   function cancel() {
     if (plan.executing.value || confirming) return
@@ -176,5 +245,5 @@ export function createAgentChat({ log, plan, readDocument, ask, fingerprint, inv
     if (pending.value && readyToDisplay.value === planContentRevision(pending.value)) log.markDisplayed(pending.value)
     readyToDisplay.value = null
   }
-  return { log, plan, pending, busy, error, consent, readyToDisplay, goalIds, year, load, send, confirm, review, displayed, allowHistory, adopt, keep, reset, cancel }
+  return { log, plan, pending, busy, error, consent, readyToDisplay, goalIds, year, load, send, generateBrief, suggestBrief, isBriefSuggestionUsed, confirm, review, displayed, allowHistory, adopt, keep, reset, cancel }
 }

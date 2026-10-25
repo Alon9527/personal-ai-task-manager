@@ -15,11 +15,59 @@ function setup() {
   const draft = agentPlanDraftSchema.parse({ version: 1, id: crypto.randomUUID(), question: '改名', model: 'test', createdAt: stamp, updatedAt: stamp, status: 'draft', actions: [{ actionId: 'rename', type: 'renameQuarterGoal', reason: '区分阶段', targetId: id, expectedUpdatedAt: stamp, payload: { title: '年度交付' } }], validation: { executable: false, selectedCount: 0, dangerousCount: 0, estimatedMinutes: 0, issueCount: 0, issues: [] } })
   const ask = vi.fn(async () => ({ status: 'ready' as const, isCurrent: () => true, value: { response: { answer: '建议改成年度交付', actions: draft.actions, sources: [], generatedAt: stamp, model: 'test', usage: null }, draft, error: null } }))
   const log = createAgentConversation()
-  const chat = createAgentChat({ log, plan, readDocument: workspace.readLatestDocument, ask, fingerprint: async target => JSON.stringify(target) })
-  return { chat, log, plan, draft, ask, replace, document }
+  const brief = vi.fn(async () => ({ status:'ready' as const, isCurrent:()=>true, value:{ focus:'先处理重点', progress:[], sources:[], model:'test', generatedAt:stamp, usage:null, suggestion:{title:'准备素材',description:'整理文件',rationale:'推进交付',projectId:null,priority:'high' as const,dueDate:null,dueTime:null,isFocus:true} } }))
+  const fingerprint=vi.fn(async target => JSON.stringify(target))
+  const chat = createAgentChat({ log, plan, readDocument: workspace.readLatestDocument, ask, brief, fingerprint })
+  return { chat, log, plan, draft, ask, brief, replace, document, fingerprint }
 }
 const target = { kind: 'minimax' as const, modelId: 'MiniMax-M3' as const }
 describe('shared Agent chat', () => {
+  it.each(['brief','message'])('ignores obsolete fingerprint failures after a successful %s retry',async mode=>{
+    const s=setup();let reject!: (cause:Error)=>void
+    s.fingerprint.mockResolvedValueOnce(JSON.stringify(target)).mockImplementationOnce(()=>new Promise((_,r)=>{reject=r}))
+    const run=()=>mode==='brief'?s.chat.generateBrief(target):s.chat.send({question:'分析',target})
+    const old=run();await vi.waitFor(()=>expect(s.fingerprint).toHaveBeenCalledTimes(2))
+    s.chat.cancel();expect(await run()).toBe(true)
+    reject(new Error('过期连接错误'));await old
+    expect(s.chat.error.value).toBe('');expect(s.log.messages.value[0]?.status).toBe('ready')
+    expect(s.log.messages.value).toHaveLength(2)
+  })
+  it('allows discarded brief suggestions again but never repeats executed ones',async()=>{
+    const s=setup();await s.chat.generateBrief(target)
+    const message=s.log.messages.value.at(-1)!
+    s.plan.setDraft(s.draft)
+    await s.chat.suggestBrief(message.id);expect(s.log.state.value.candidate).not.toBeNull()
+    s.chat.keep();expect(await s.chat.suggestBrief(message.id)).toBe(true)
+    s.chat.adopt();s.plan.discardDraft()
+    expect(await s.chat.suggestBrief(message.id)).toBe(true)
+    s.chat.review();expect(await s.chat.confirm()).toBe(true)
+    expect(await s.chat.suggestBrief(message.id)).toBe(false)
+    expect(s.replace).toHaveBeenCalledTimes(1)
+  })
+  it('stores sourced briefs in conversation and turns suggestions into reviewable plans only', async () => {
+    const s=setup(); await s.chat.generateBrief(target)
+    const message=s.log.messages.value.at(-1)!
+    expect(message.text).toContain('先处理重点'); expect(message.brief?.suggestion?.title).toBe('准备素材')
+    await s.chat.suggestBrief(message.id)
+    expect(s.plan.draft.value?.actions[0]?.type).toBe('createTask'); expect(s.replace).not.toHaveBeenCalled()
+    const id=s.plan.draft.value?.id; await s.chat.suggestBrief(message.id)
+    expect(s.plan.draft.value?.id).toBe(id)
+  })
+  it('serializes briefs with chat and ignores cancelled brief responses', async () => {
+    const s=setup(); let resolve!: (v:any)=>void
+    s.brief.mockImplementationOnce(()=>new Promise(r=>{resolve=r}))
+    const pending=s.chat.generateBrief(target)
+    await vi.waitFor(()=>expect(s.brief).toHaveBeenCalledOnce())
+    expect(await s.chat.send({question:'继续',target})).toBe(false)
+    expect(s.ask).not.toHaveBeenCalled(); s.chat.cancel()
+    resolve({status:'ready',isCurrent:()=>true,value:{focus:'迟到的简报'}}); await pending
+    expect(s.log.messages.value).toHaveLength(1); expect(s.log.messages.value[0]?.status).toBe('failed')
+  })
+  it('does not bypass changed-model consent for a brief', async () => {
+    const s=setup(); await s.chat.send({question:'分析',target})
+    await s.chat.generateBrief({kind:'minimax',modelId:'MiniMax-M2.7'})
+    expect(s.brief).not.toHaveBeenCalled(); expect(s.chat.consent.value).toBeTruthy()
+  })
   it('binds confirmation to a rendered proposal and executes locally exactly once', async () => {
     const s = setup()
     await s.chat.send({ question: '改第四季度目标名', target })

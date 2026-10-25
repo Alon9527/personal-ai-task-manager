@@ -18,7 +18,7 @@ export function useAgentConversation() {
   const generation = createAiGeneration(readDocument)
   // Access is deferred so disabled local storage produces a visible warning.
   const disk = import.meta.client ? { getItem: (key: string) => localStorage.getItem(key), setItem: (key: string, value: string) => localStorage.setItem(key, value) } : undefined
-  chat = createAgentChat({ log: createAgentConversation(disk), plan: useAgentPlan(), readDocument, ask: generation.ask, invalidate: generation.invalidate,
+  chat = createAgentChat({ log: createAgentConversation(disk), plan: useAgentPlan(), readDocument, ask: generation.ask, brief: generation.brief, invalidate: generation.invalidate,
     connectionGuard(key) {
       const values = JSON.parse(key)
       return values[0].kind === 'custom'

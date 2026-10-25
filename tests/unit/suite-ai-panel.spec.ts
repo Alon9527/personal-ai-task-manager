@@ -11,6 +11,14 @@ vi.mock('../../app/services/model-provider',()=>({listModelProviders:async()=>({
 import SuiteAiPanel from '../../app/components/suite/SuiteAiPanel.vue'
 import { saveAiModelTarget } from '../../app/services/ai-model-target'
 let response:any
+it('keeps model management in settings and puts goal context beside the fixed composer', async () => {
+ const wrapper=await mountSuspended(SuiteAiPanel,{global:{stubs:{VoiceInputButton:true}}});await flushPromises()
+ expect(wrapper.find('[aria-label="选择 AI 模型"]').exists()).toBe(false)
+ expect(wrapper.find('.suite-ai-composer [data-goal-picker]').exists()).toBe(true)
+ expect(wrapper.find('.chat-log .goal-options').exists()).toBe(false)
+ expect(wrapper.get('.suite-ai-input [aria-label="添加图片"]').exists()).toBe(true)
+ wrapper.unmount()
+})
 const imageData = 'data:image/png;base64,iVBORw0KGgo='
 function pngFile(name = 'test.png') {
  return new File([new Uint8Array([137,80,78,71,13,10,26,10])], name, { type: 'image/png' })
@@ -58,7 +66,7 @@ it('revokes image consent when changing models or adding another picture', async
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises(); await attachImages(wrapper, [pngFile()])
  await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
- await wrapper.get('[aria-label="选择 AI 模型"]').setValue('minimax:MiniMax-M3.1-Flash')
+ saveAiModelTarget({kind:'minimax',modelId:'MiniMax-M3.1-Flash'}); await flushPromises()
  await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
  expect(injected.ask).not.toHaveBeenCalled()
  expect((wrapper.get('.ai-image-input input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
@@ -112,13 +120,13 @@ it('keeps consented images and input after a model failure for an explicit retry
 it('shows native model errors instead of swallowing the reason',async()=>{
  injected.ask.mockRejectedValue('模型回答格式不正确：示例错误')
  const wrapper=await mountSuspended(SuiteAiPanel,{global:{stubs:{VoiceInputButton:true}}});await flushPromises()
- await wrapper.find('.suite-ai-confirm').trigger('click');await flushPromises()
+ await wrapper.find('[data-generate-plan]').trigger('click');await flushPromises()
  expect(wrapper.get('[role="alert"]').text()).toContain('模型回答格式不正确')
  expect(injected.plan.setDraft).not.toHaveBeenCalled();wrapper.unmount()
 })
 beforeEach(()=>{
  localStorage.clear(); const doc=createDemoWorkspace();const task=doc.tasks[0]!
- injected.workspace={tasks:ref(doc.tasks),quarterGoals:ref(doc.quarterGoals),ready:ref(true),readLatestDocument:vi.fn().mockResolvedValue(doc),createTask:vi.fn(),updateTask:vi.fn()}
+ injected.workspace={document:ref(doc),tasks:ref(doc.tasks),quarterGoals:ref(doc.quarterGoals),ready:ref(true),readLatestDocument:vi.fn().mockResolvedValue(doc),createTask:vi.fn(),updateTask:vi.fn()}
  const draft=shallowRef<any>(null)
  injected.plan={draft,validation:ref(null),executing:ref(false),error:ref(null),loadDraft:vi.fn(),setDraft:vi.fn((value)=>{draft.value=value;return true}),requestExecution:vi.fn().mockResolvedValue({status:'executed'}),toggleAction:vi.fn(),discardDraft:vi.fn()}
  response={answer:'建议安排在上午。',model:'test-model',generatedAt:'2026-09-15T01:00:00.000Z',actions:[{actionId:'schedule-one',type:'updateTask',reason:'先安排重要事项',selected:true,dangerous:false,targetId:task.id,expectedUpdatedAt:task.updatedAt,payload:{dueDate:'2026-09-15',dueTime:'09:30'}}]}
@@ -126,7 +134,7 @@ beforeEach(()=>{
 })
 it('saves a proposal without executing and executes only after explicit confirmation',async()=>{
  const wrapper=await mountSuspended(SuiteAiPanel,{global:{stubs:{VoiceInputButton:true}}});await flushPromises()
- await wrapper.find('.suite-ai-confirm').trigger('click');await flushPromises()
+ await wrapper.find('[data-generate-plan]').trigger('click');await flushPromises()
  expect(injected.plan.setDraft).toHaveBeenCalledOnce();expect(injected.plan.requestExecution).not.toHaveBeenCalled()
  expect(injected.workspace.createTask).not.toHaveBeenCalled();expect(injected.workspace.updateTask).not.toHaveBeenCalled()
  expect(wrapper.find('.suite-plan-card').text()).toContain('09:30')
@@ -137,14 +145,14 @@ it('does not persist a late proposal after the panel is unmounted',async()=>{
  let resolveResponse!:(value:any)=>void
  injected.ask.mockImplementation(()=>new Promise(resolve=>{resolveResponse=resolve}))
  const wrapper=await mountSuspended(SuiteAiPanel,{global:{stubs:{VoiceInputButton:true}}});await flushPromises()
- await wrapper.find('.suite-ai-confirm').trigger('click');await flushPromises();wrapper.unmount()
+ await wrapper.find('[data-generate-plan]').trigger('click');await flushPromises();wrapper.unmount()
  resolveResponse(response);await flushPromises();expect(injected.plan.setDraft).not.toHaveBeenCalled()
 })
 it('validates the proposal against the captured workspace before saving', async () => {
  response.actions[0].expectedUpdatedAt = '2000-01-01T00:00:00.000Z'
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises()
- await wrapper.find('.suite-ai-confirm').trigger('click'); await flushPromises()
+ await wrapper.find('[data-generate-plan]').trigger('click'); await flushPromises()
  expect(injected.plan.setDraft).toHaveBeenCalledOnce()
  const draft = injected.plan.setDraft.mock.calls[0][0]
  expect(draft.validation.issues.some((issue: { code: string }) => issue.code === 'conflict')).toBe(true)
@@ -156,7 +164,7 @@ it('uses a readable format error and preserves the input for retry', async () =>
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises()
  await wrapper.get('[aria-label="AI 计划要求"]').setValue('安排今天工作')
- await wrapper.find('.suite-ai-confirm').trigger('click'); await flushPromises()
+ await wrapper.find('[data-generate-plan]').trigger('click'); await flushPromises()
  expect(wrapper.get('[role="alert"]').text()).toContain('AI 返回的计划格式无效')
  expect(wrapper.get('[role="alert"]').text()).not.toContain('invalid_format')
  expect((wrapper.get('[aria-label="AI 计划要求"]').element as HTMLInputElement).value).toBe('安排今天工作')
@@ -171,7 +179,7 @@ it('acknowledges a submitted message beside the composer while waiting, then sho
  await flushPromises()
  await wrapper.get('[aria-label="AI 计划要求"]').setValue('你好，今天先做什么？')
  await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
- expect(wrapper.find('[data-ai-composer-status]').text()).toContain('正在等待模型回复')
+ expect(wrapper.find('[data-ai-composer-status]').text()).toContain('正在等待处理')
  expect(wrapper.find('[role="log"]').text()).toContain('你好，今天先做什么？')
  resolveResponse({ ...response, actions: [], answer: '可以先检查临近截止的事项。' }); await flushPromises()
  expect(wrapper.get('[role="log"]').text()).toContain('可以先检查临近截止的事项。')
@@ -182,7 +190,7 @@ it('acknowledges a submitted message beside the composer while waiting, then sho
 it('allows a question with a pending plan without replacing or executing that plan', async () => {
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises()
- await wrapper.get('.suite-ai-confirm').trigger('click'); await flushPromises()
+ await wrapper.get('[data-generate-plan]').trigger('click'); await flushPromises()
  const original = injected.plan.draft.value
  response = { ...response, answer: '建议先做截止时间更早的任务。', actions: [] }
  injected.ask.mockResolvedValue(response)
@@ -197,7 +205,7 @@ it('allows a question with a pending plan without replacing or executing that pl
 it('keeps the existing plan when a follow-up returns new actions and explains it by the composer', async () => {
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises()
- await wrapper.get('.suite-ai-confirm').trigger('click'); await flushPromises()
+ await wrapper.get('[data-generate-plan]').trigger('click'); await flushPromises()
  const original = injected.plan.draft.value
  await wrapper.get('[aria-label="AI 计划要求"]').setValue('改到下午如何？')
  await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
