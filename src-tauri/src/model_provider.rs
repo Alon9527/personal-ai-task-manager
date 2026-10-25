@@ -40,6 +40,25 @@ pub struct ProviderProfile {
     pub updated_at: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct InferenceGuard {
+    pub base_url: String,
+    pub model_id: String,
+    pub credential_generation: u64,
+    pub updated_at: String,
+}
+
+impl InferenceGuard {
+    fn validate(&self, profile: &ProviderProfile) -> Result<(), String> {
+        if self.base_url != profile.base_url || self.model_id != profile.model_id
+            || self.credential_generation != profile.credential_generation || self.updated_at != profile.updated_at {
+            return Err("模型连接已变化，未发送聊天记录；请重新确认连接。".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProfileDto {
@@ -439,6 +458,10 @@ impl ModelProviderStore {
     }
 
     pub(crate) fn resolve_for_inference(&self, profile_id: &str) -> Result<ResolvedProvider, String> {
+        self.resolve_for_inference_guarded(profile_id, None)
+    }
+
+    fn resolve_for_inference_guarded(&self, profile_id: &str, expected: Option<&InferenceGuard>) -> Result<ResolvedProvider, String> {
         let id = parse_uuid(profile_id, "配置 ID")?.hyphenated().to_string();
         let registry = self.load()?;
         let profile = registry
@@ -446,6 +469,7 @@ impl ModelProviderStore {
             .iter()
             .find(|profile| profile.id == id)
             .ok_or_else(|| "模型服务商配置不存在".to_string())?;
+        if let Some(expected) = expected { expected.validate(profile)?; }
         let is_local = is_local_base_url(&profile.base_url)?;
         let api_key = self.credentials.read(&id)?;
         if !is_local && api_key.is_none() {
@@ -728,6 +752,12 @@ pub(crate) fn resolve_provider_for_inference(
     id: &str,
 ) -> Result<ResolvedProvider, String> {
     with_lifecycle_store(state, |store| store.resolve_for_inference(id))
+}
+
+pub(crate) fn resolve_provider_for_inference_guarded(
+    state: &Mutex<ModelProviderStore>, id: &str, expected: Option<&InferenceGuard>,
+) -> Result<ResolvedProvider, String> {
+    with_lifecycle_store(state, |store| store.resolve_for_inference_guarded(id, expected))
 }
 
 async fn run_connection_test_with<T, Operation, OperationFuture>(
@@ -2857,6 +2887,23 @@ mod tests {
             &temporary_path,
             &blocker_path,
         ]);
+    }
+
+    #[test]
+    fn inference_guard_rejects_changes_after_frontend_consent() {
+        let original = profile(1, "Local", "http://127.0.0.1:11434/v1");
+        let guard = InferenceGuard { base_url: original.base_url.clone(), model_id: original.model_id.clone(), credential_generation: original.credential_generation, updated_at: original.updated_at.clone() };
+        assert!(guard.validate(&original).is_ok());
+        for field in 0..4 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.base_url = "https://different.example/v1".to_string(),
+                1 => changed.model_id = "different-model".to_string(),
+                2 => changed.credential_generation += 1,
+                _ => changed.updated_at = "2026-10-25T09:00:00.000Z".to_string(),
+            }
+            assert!(guard.validate(&changed).is_err());
+        }
     }
 
     #[test]

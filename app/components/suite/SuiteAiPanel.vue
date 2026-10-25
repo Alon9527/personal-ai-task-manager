@@ -13,6 +13,8 @@ import SuitePlanFields from './SuitePlanFields.vue'
 import { addTaskAttachments } from '../../services/task-attachments'
 import { clipboardImages } from '../../services/clipboard-images'
 import type { TaskAttachment } from '#shared/workspace'
+import { useAgentConversation } from '../../composables/useAgentConversation'
+import AgentConversation from '../agent/AgentConversation.vue'
 const images = ref<TaskAttachment[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
 const imageBusy = ref(false)
@@ -28,20 +30,14 @@ async function addImages(files: File[]) {
 function pasteImage(event:ClipboardEvent){const files=clipboardImages(event.clipboardData);if(files.length){event.preventDefault();void addImages(files)}}
 async function selectImages(event:Event){const input=event.target as HTMLInputElement;await addImages(Array.from(input.files??[]));input.value=''}
 const workspace=useWorkspace(); const route=useRoute(); const router=useRouter(); const plan=useAgentPlan(); const ui=useWorkspaceUi()
-const generation = createAiGeneration(() => workspace.readLatestDocument())
-const busy = generation.asking
+const chat = useAgentConversation()
+const busy = chat.busy
 const selectedIds=useState<string[]>('suite-inbox-selection',()=>[])
 const inbox=computed(()=>route.path==='/inbox'); const prompt=ref(''); const summary=ref(''); const error=ref(''); const discarded=ref(false)
-const messages = ref<{ role: 'user' | 'assistant', text: string }[]>([])
-const conversation = ref<HTMLElement | null>(null)
-function addMessage(role: 'user' | 'assistant', text: string) {
- messages.value = [...messages.value, { role, text }].slice(-20)
- void nextTick(() => { if (conversation.value) conversation.value.scrollTop = conversation.value.scrollHeight })
-}
 const target=ref<AiModelTarget>(DEFAULT_AI_MODEL_TARGET); const providers=ref<ModelProviderProfile[]>([])
 let requestGeneration=0
-onBeforeUnmount(()=>{requestGeneration++;generation.dispose()})
-watch([()=>route.path,target],()=>{requestGeneration++;generation.invalidate();allowImages.value=false;summary.value='';error.value='';discarded.value=false;messages.value=[]},{deep:true,flush:'sync'})
+onBeforeUnmount(()=>{requestGeneration++;chat.cancel()})
+watch([()=>route.path,target],()=>{requestGeneration++;chat.cancel();allowImages.value=false;summary.value='';error.value='';discarded.value=false},{deep:true,flush:'sync'})
 const pending=computed(()=>isPendingAiPlan(plan.draft.value)?plan.draft.value:null)
 const titles=computed(()=>new Map(workspace.tasks.value.map(t=>[t.id,t.title])))
 const selectedTarget=computed({get:()=>target.value.kind==='minimax'?`minimax:${target.value.modelId}`:`custom:${target.value.profileId}`,set:(value:string)=>{const [kind,id]=value.split(':'); target.value=saveAiModelTarget(kind==='minimax'?{kind,modelId:id}:{kind:'custom',profileId:id})}})
@@ -58,35 +54,25 @@ async function generate(mode: 'plan' | 'message' = 'plan'){
  const question=prompt.value.trim() || (images.value.length?'请分析这些图片中的待办或已完成事项，提出新增任务或更新已有任务的建议；无法明确匹配时先询问。等我确认后再修改任务。':inbox.value?'请将这些收集箱记录整理成可执行任务，建议重要性、项目归属和日期。请更新已有任务，不重复创建。':'请为今天提出可执行的日程安排，考虑任务重要性、截止日期和预计时长。不要直接执行。')
  if(mode==='plan'&&inbox.value&&!selectedIds.value.length&&!images.value.length){error.value='请先选择要整理的记录，或添加图片。';return}
  const submittedPrompt=prompt.value
- if(mode==='message')addMessage('user',question)
- const result=await generation.ask({question,target:target.value,images:images.value.map(i=>i.dataUrl),taskIds:inbox.value&&selectedIds.value.length&&!images.value.length?[...selectedIds.value]:undefined})
- if(!result?.isCurrent())return
- if(result.status==='failed'){error.value=result.error;return}
- const proposal=result.value
- summary.value=proposal.response.answer
- if(mode==='message')addMessage('assistant',proposal.response.answer)
- if(proposal.error){error.value=proposal.error;return}
- try {
-   if(proposal.draft && saveAiProposal(plan,proposal.draft).status==='replacement-required')throw new Error('回复包含新的任务建议，原计划已保留，未执行或覆盖。请先审阅或撤销原计划，再重新生成。')
+ const sent=await chat.send({question,target:target.value,images:images.value.map(i=>i.dataUrl),taskIds:inbox.value&&selectedIds.value.length&&!images.value.length?[...selectedIds.value]:undefined})
+ if(sent){
    if(prompt.value===submittedPrompt)prompt.value=''
    images.value=[];allowImages.value=false
- }catch(e){error.value=aiErrorMessage(e)}
+ }
 }
-async function confirm(){error.value='';const result=await plan.requestExecution();if(['executed','already-applied','applied-cleanup-failed'].includes(result.status)){summary.value='已将确认的计划写入任务。';return}error.value=plan.error.value??'计划需进一步审阅，请检查关联、冲突或危险操作。';await router.push('/agent-plan')}
+async function confirm(){await chat.confirm()}
 function postpone(){if(!discarded.value){discarded.value=true;return}plan.discardDraft();discarded.value=false;summary.value='已撤销这份建议，没有修改任务。'}
 </script>
 <template><section class="suite-ai" @paste="pasteImage"><header><h2><UIcon name="i-lucide-sparkles" />{{inbox?'AI 整理建议':'AI 计划助手'}}</h2><span>{{pending?'待你确认':'由你决定'}}</span></header><div class="suite-ai-scroll">
 <p v-if="inbox" class="suite-hint">已选择 {{selectedIds.length}} 条记录</p>
-<article class="suite-ai-summary"><strong>{{pending?'先审阅建议，再落入日程。':inbox?'把零散事项，整理成下一步。':'先做重要的事，让计划更从容。'}}</strong><p>{{summary || (pending?'上次计划仍在等待确认，可继续调整或执行。':'根据你的真实任务提出安排。你可以选择、调整，确认后才会写入。')}}</p></article>
+<article v-if="!chat.log.messages.value.length" class="suite-ai-summary"><strong>{{inbox?'把零散事项，整理成下一步。':'先做重要的事，让计划更从容。'}}</strong><p>根据你的真实任务提出安排。你可以选择、调整，确认后才会写入。</p></article>
+<AgentConversation :show-error="false" />
 <section class="ai-image-input"><button type="button" :disabled="busy||imageBusy" @click="imageInput?.click()">添加图片 / Ctrl+V 粘贴</button><input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden @change="selectImages"><div v-for="picture in images" :key="picture.id" class="ai-image-preview"><img :src="picture.dataUrl" :alt="picture.name"><button type="button" :disabled="busy||imageBusy" :aria-label="`移除图片 ${picture.name}`" @click="images=images.filter(i=>i.id!==picture.id);allowImages=false">移除</button></div><label v-if="images.length"><input v-model="allowImages" type="checkbox" :disabled="busy">允许发送以上图片给所选模型，分析新增或已完成事项；只生成建议，确认后才修改任务。</label></section>
-<template v-if="pending"><h3>{{inbox?'建议整理为以下任务':'为你推荐以下日程安排'}}</h3><article v-for="action in pending.actions" :key="action.actionId" class="suite-plan-card"><input type="checkbox" :checked="action.selected" :aria-label="`选择建议：${label(action)}`" @change="plan.toggleAction(action.actionId,($event.target as HTMLInputElement).checked)"><div><strong>{{timing(action)||'待安排时间'}}</strong><p>{{label(action)}}</p><SuitePlanFields :action="action" :inbox="inbox" /><small v-if="action.dangerous">此操作需额外确认</small></div><NuxtLink to="/agent-plan" aria-label="调整建议"><UIcon name="i-lucide-pencil" /></NuxtLink></article>
-<p v-if="plan.validation.value?.issues.length" class="suite-hint">有 {{plan.validation.value.issues.length}} 项需要在审阅页检查。</p><button class="suite-primary suite-ai-confirm" :disabled="plan.executing.value||!pending.actions.some(a=>a.selected)" @click="confirm">{{plan.executing.value?'正在执行…':inbox?'确认整理任务':'确认加入日程'}}</button><NuxtLink class="suite-ai-adjust" to="/agent-plan">调整计划</NuxtLink><button class="suite-text" @click="postpone">{{discarded?'再次点击撤销建议':'暂不采用'}}</button></template>
-<template v-else><button class="suite-primary suite-ai-confirm" :disabled="busy||imageBusy" @click="generate('plan')">{{busy?'正在思考…':inbox?'生成整理建议':'生成日程建议'}}</button><p class="suite-hint">点击会将{{inbox?'所选任务及项目上下文':'工作区任务上下文'}}发送到所选模型。</p></template>
+<template v-if="!pending"><button class="suite-primary suite-ai-confirm" :disabled="busy||imageBusy" @click="generate('plan')">{{busy?'正在思考…':inbox?'生成整理建议':'生成日程建议'}}</button><p class="suite-hint">点击会将{{inbox?'所选任务及项目上下文':'工作区任务上下文'}}发送到所选模型。</p></template>
 <details class="suite-ai-model"><summary>模型与连接</summary><select v-model="selectedTarget" aria-label="选择 AI 模型"><option v-for="model in MINIMAX_MODELS" :key="model.id" :value="`minimax:${model.id}`">MiniMax {{model.label}}</option><option v-for="profile in providers" :key="profile.id" :value="`custom:${profile.id}`">{{profile.name}} · {{profile.modelId}}</option></select><NuxtLink to="/settings?tab=models">管理模型 API</NuxtLink></details>
 </div><div class="suite-ai-composer">
-<div v-if="messages.length" ref="conversation" class="suite-ai-conversation" role="log" aria-label="本次问答" aria-live="polite"><p v-for="(message,index) in messages" :key="index" :class="message.role"><strong>{{message.role==='user'?'你':'AI'}}</strong><span>{{message.text}}</span></p></div>
 <p v-if="busy" data-ai-composer-status class="suite-ai-feedback" role="status">正在等待模型回复…本地模型首次加载可能较慢。</p>
-<p v-if="error" data-ai-composer-error class="suite-error suite-ai-feedback" role="alert">{{error}}</p>
+<p v-if="error||chat.error.value" data-ai-composer-error class="suite-error suite-ai-feedback" role="alert">{{error||chat.error.value}}</p>
 <form class="suite-ai-input" :aria-busy="busy" @submit.prevent="generate('message')"><UIcon name="i-lucide-sparkles" /><input v-model="prompt" aria-label="AI 计划要求" placeholder="输入问题或待办…" maxlength="1000"><VoiceInputButton @transcript="text=>prompt=[prompt,text].filter(Boolean).join(' ')" /><button type="submit" aria-label="发送计划要求" :disabled="busy||imageBusy||(!prompt.trim()&&!images.length)"><UIcon name="i-lucide-arrow-up" /></button></form>
 </div></section></template>
 <style scoped>

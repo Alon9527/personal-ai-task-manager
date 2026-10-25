@@ -68,6 +68,7 @@ export async function applyMiniMaxAgentActions(actions: MiniMaxAgentAction[], wo
 }
 
 export function describeMiniMaxAgentAction(action: MiniMaxAgentAction, taskTitles: ReadonlyMap<string, string>) {
+  if (action.type === 'renameQuarterGoal') return `季度目标改名为「${action.payload.title}」`
   if (action.type === 'createProject') return `创建项目「${action.payload.name}」`
   if (action.type === 'createMilestone') return `创建里程碑「${action.payload.title}」`
   if (action.type === 'createTask') return `创建任务「${action.payload.title}」`

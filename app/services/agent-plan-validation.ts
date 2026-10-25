@@ -54,6 +54,7 @@ const ACTION_TYPES = new Set([
   'createProject', 'updateProject', 'setProjectCompleted', 'deleteProject',
   'createMilestone', 'updateMilestone', 'setMilestoneCompleted', 'deleteMilestone',
   'createTask', 'updateTask', 'setTaskCompleted', 'deleteTask',
+  'renameQuarterGoal',
 ])
 
 const FIELD_PRIORITY = [
@@ -135,6 +136,7 @@ export function safeValidateAgentPlan(
   const projectsById = new Map(projects.map(project => [project.id, project]))
   const milestonesById = new Map(milestones.map(milestone => [milestone.id, milestone]))
   const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const goalsById = new Map(quarterGoals.map(goal => [goal.id, goal]))
   const createByRef = new Map<string, { action: RawAction, index: number }>()
   const createCandidatesByRef = new Map<string, Array<{ action: RawAction, index: number }>>()
   const duplicateActionIds = new Set<number>()
@@ -257,6 +259,7 @@ export function safeValidateAgentPlan(
         projectsById,
         milestonesById,
         tasksById,
+        goalsById,
         expectedOwnerId,
         addIssue,
       )
@@ -352,9 +355,10 @@ function validateExistingTarget(
   projectsById: Map<string, Project>,
   milestonesById: Map<string, Milestone>,
   tasksById: Map<string, Task>,
+  goalsById: Map<string, QuarterGoal>,
   expectedOwnerId: string | null,
   addIssue: ValidationContext['addIssue'],
-): Project | Milestone | Task | null {
+): Project | Milestone | Task | QuarterGoal | null {
   if (!isNonEmptyString(action.targetId)) {
     addIssue(index, action, 'field', '现有记录操作缺少有效的 targetId。', 'targetId')
     return null
@@ -366,7 +370,7 @@ function validateExistingTarget(
       ? milestonesById.get(action.targetId)
       : TASK_TYPES.has(type)
         ? tasksById.get(action.targetId)
-        : undefined
+        : type === 'renameQuarterGoal' ? goalsById.get(action.targetId) : undefined
   if (!target || target.deletedAt !== null || !hasExpectedOwner(target, expectedOwnerId)) {
     addIssue(index, action, 'missing-target', '目标记录不存在、类型不匹配或已移入回收站。', 'targetId')
     return null
@@ -402,11 +406,15 @@ function validateExistingPayload(
   type: string,
   action: RawAction,
   payload: RawPayload | null,
-  target: Project | Milestone | Task | null,
+  target: Project | Milestone | Task | QuarterGoal | null,
   index: number,
   context: Pick<ValidationContext, 'addIssue' | 'projectsById' | 'milestonesById' | 'expectedOwnerId'>,
 ) {
   if (!payload) return
+  if (type === 'renameQuarterGoal') {
+    validateTrimmedString(payload, 'title', 160, action, index, context.addIssue, false)
+    return
+  }
   if (type === 'updateProject') {
     validateNonEmptyPatch(action, payload, index, context.addIssue)
     validateProjectFields(action, payload, index, context.addIssue, true)
@@ -1023,7 +1031,7 @@ function validUuid(value: unknown): value is string {
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
-function isTask(value: Project | Milestone | Task): value is Task {
+function isTask(value: Project | Milestone | Task | QuarterGoal): value is Task {
   return 'milestoneId' in value
 }
 

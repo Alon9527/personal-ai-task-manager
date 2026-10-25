@@ -59,6 +59,7 @@ vi.mock('../../app/services/model-provider', async () => {
 })
 
 const configuredStatus = {
+  connectionRevision: 'synthetic-session',
   available: true,
   configured: true,
   model: 'MiniMax-M2.7',
@@ -85,11 +86,17 @@ function profile(overrides: Record<string, unknown> = {}) {
 }
 
 describe('MiniMax context panel', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear()
     localStorage.setItem('personal-ai-workspace:v1', JSON.stringify(createDemoWorkspace()))
     vi.clearAllMocks()
     providerMocks.list.mockResolvedValue({ profiles: [], pendingCredentialDeletes: [] })
+    // Nuxt reuses its workspace across mounts; clear the shared chat explicitly
+    // between isolated test cases, just as a user starts a new conversation.
+    const { defineComponent } = await import('vue')
+    const { useAgentConversation } = await import('../../app/composables/useAgentConversation')
+    const reset = await mountSuspended(defineComponent({ setup() { useAgentConversation().reset(true); return () => null } }))
+    reset.unmount()
   })
 
   it('shows real desktop credential setup instead of a fabricated brief', async () => {

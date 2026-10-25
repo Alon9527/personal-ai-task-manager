@@ -6,7 +6,7 @@ import { createDemoWorkspace } from '../../app/data/demo-workspace'
 const injected=vi.hoisted(()=>({workspace:null as any,plan:null as any,ask:vi.fn()}))
 vi.mock('../../app/composables/useWorkspace',()=>({useWorkspace:()=>injected.workspace}))
 vi.mock('../../app/composables/useAgentPlan',()=>({useAgentPlan:()=>injected.plan}))
-vi.mock('../../app/services/minimax',async(load)=>({...await load<typeof import('../../app/services/minimax')>(),askAi:injected.ask}))
+vi.mock('../../app/services/minimax',async(load)=>({...await load<typeof import('../../app/services/minimax')>(),askAi:injected.ask,getMiniMaxStatus:async()=>({available:true,configured:true,region:'cn',connectionRevision:'synthetic-session'})}))
 vi.mock('../../app/services/model-provider',()=>({listModelProviders:async()=>({profiles:[],pendingCredentialDeletes:[]})}))
 import SuiteAiPanel from '../../app/components/suite/SuiteAiPanel.vue'
 import { saveAiModelTarget } from '../../app/services/ai-model-target'
@@ -118,7 +118,7 @@ it('shows native model errors instead of swallowing the reason',async()=>{
 })
 beforeEach(()=>{
  localStorage.clear(); const doc=createDemoWorkspace();const task=doc.tasks[0]!
- injected.workspace={tasks:ref(doc.tasks),readLatestDocument:vi.fn().mockResolvedValue(doc),createTask:vi.fn(),updateTask:vi.fn()}
+ injected.workspace={tasks:ref(doc.tasks),quarterGoals:ref(doc.quarterGoals),ready:ref(true),readLatestDocument:vi.fn().mockResolvedValue(doc),createTask:vi.fn(),updateTask:vi.fn()}
  const draft=shallowRef<any>(null)
  injected.plan={draft,validation:ref(null),executing:ref(false),error:ref(null),loadDraft:vi.fn(),setDraft:vi.fn((value)=>{draft.value=value;return true}),requestExecution:vi.fn().mockResolvedValue({status:'executed'}),toggleAction:vi.fn(),discardDraft:vi.fn()}
  response={answer:'建议安排在上午。',model:'test-model',generatedAt:'2026-09-15T01:00:00.000Z',actions:[{actionId:'schedule-one',type:'updateTask',reason:'先安排重要事项',selected:true,dangerous:false,targetId:task.id,expectedUpdatedAt:task.updatedAt,payload:{dueDate:'2026-09-15',dueTime:'09:30'}}]}
@@ -201,7 +201,8 @@ it('keeps the existing plan when a follow-up returns new actions and explains it
  const original = injected.plan.draft.value
  await wrapper.get('[aria-label="AI 计划要求"]').setValue('改到下午如何？')
  await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
- expect(wrapper.find('[data-ai-composer-error]').text()).toContain('原计划')
+ expect(wrapper.find('[data-chat-plan]').text()).toContain('候选修改')
+ expect(wrapper.find('[data-chat-plan]').text()).toContain('保留原方案')
  expect(injected.plan.draft.value).toBe(original)
  wrapper.unmount()
 })

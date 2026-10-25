@@ -25,7 +25,7 @@ export type AgentActionResult = {
   actionId: string
   type: AgentActionType
   entityId: string
-  entityType: 'project' | 'milestone' | 'task'
+  entityType: 'project' | 'milestone' | 'task' | 'quarterGoal'
   outcome: 'created' | 'updated' | 'completed' | 'reopened' | 'deleted'
 }
 
@@ -547,6 +547,12 @@ function executeAction(context: ExecutionContext): AgentActionResult {
     case 'deleteMilestone': return deleteMilestone(context, action)
     case 'createTask': return createTask(context, action)
     case 'updateTask': return updateTask(context, action)
+    case 'renameQuarterGoal': {
+      const goal = context.document.quarterGoals.find(item => item.id === action.targetId)!
+      goal.title = action.payload.title
+      goal.updatedAt = context.timestamp
+      return changedResult(action, 'quarterGoal', 'updated')
+    }
     case 'setTaskCompleted': return setTaskCompleted(context, action)
     case 'deleteTask': return deleteTask(context, action)
   }
@@ -910,6 +916,7 @@ function changedResult(
 }
 
 function actionEntityType(type: AgentActionType): AgentActionResult['entityType'] {
+  if (type === 'renameQuarterGoal') return 'quarterGoal'
   if (type.endsWith('Project')) return 'project'
   if (type.endsWith('Milestone')) return 'milestone'
   return 'task'

@@ -9,11 +9,14 @@ import AgentDeleteConfirmDialog from '../components/agent/AgentDeleteConfirmDial
 import AgentExecutionResult from '../components/agent/AgentExecutionResult.vue'
 import { useAgentPlan } from '../composables/useAgentPlan'
 import { useWorkspace } from '../composables/useWorkspace'
+import { useAgentConversation } from '../composables/useAgentConversation'
 import type { AgentAction } from '../services/agent-plan-schema'
 import type { AgentActionResult } from '../services/agent-plan-executor'
 import type { WorkspaceDocument } from '#shared/workspace'
 
 const controller = useAgentPlan()
+// Install the shared receipt observer even when opened directly after restart.
+useAgentConversation()
 const workspace = useWorkspace()
 const ui = useWorkspaceUi()
 const router = useRouter()

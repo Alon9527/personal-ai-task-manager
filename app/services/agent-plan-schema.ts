@@ -24,6 +24,7 @@ export const agentActionTypeSchema = z.enum([
   'createProject', 'updateProject', 'setProjectCompleted', 'deleteProject',
   'createMilestone', 'updateMilestone', 'setMilestoneCompleted', 'deleteMilestone',
   'createTask', 'updateTask', 'setTaskCompleted', 'deleteTask',
+  'renameQuarterGoal',
 ])
 
 export const agentExistingReferenceSchema = z.object({
@@ -154,7 +155,7 @@ function createActionSchema<
 }
 
 function existingActionSchema<
-  Type extends 'updateProject' | 'setProjectCompleted' | 'updateMilestone' | 'setMilestoneCompleted' | 'updateTask' | 'setTaskCompleted',
+  Type extends 'updateProject' | 'setProjectCompleted' | 'updateMilestone' | 'setMilestoneCompleted' | 'updateTask' | 'setTaskCompleted' | 'renameQuarterGoal',
   Payload extends z.ZodType,
 >(type: Type, payload: Payload) {
   return z.object({
@@ -192,8 +193,10 @@ export const createTaskActionSchema = createActionSchema('createTask', createTas
 export const updateTaskActionSchema = existingActionSchema('updateTask', updateTaskPayloadSchema)
 export const setTaskCompletedActionSchema = existingActionSchema('setTaskCompleted', completionPayloadSchema)
 export const deleteTaskActionSchema = deleteActionSchema('deleteTask')
+export const renameQuarterGoalActionSchema = existingActionSchema('renameQuarterGoal', z.object({ title: titleSchema }).strict())
 
 export const agentActionSchema = z.discriminatedUnion('type', [
+  renameQuarterGoalActionSchema,
   createProjectActionSchema,
   updateProjectActionSchema,
   setProjectCompletedActionSchema,

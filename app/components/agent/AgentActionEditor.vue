@@ -26,7 +26,7 @@ const localErrors = reactive<Record<string, string>>({})
 const saving = ref(false)
 let initialForm: Record<string, unknown> = {}
 
-const entityKind = computed(() => props.action.type.endsWith('Project')
+const entityKind = computed(() => props.action.type === 'renameQuarterGoal' ? 'quarterGoal' : props.action.type.endsWith('Project')
   ? 'project'
   : props.action.type.endsWith('Milestone') ? 'milestone' : 'task')
 const isDelete = computed(() => props.action.type.startsWith('delete'))
@@ -53,6 +53,7 @@ const milestoneOptions = computed(() => [
 ])
 const visibleErrorFields = computed(() => editableFieldNames.value.filter(field => issueFor(field)))
 const editableFieldNames = computed(() => {
+  if (entityKind.value === 'quarterGoal') return ['reason', 'title']
   if (isCompletion.value) return ['reason', 'completed']
   if (entityKind.value === 'project') return ['reason', 'name', 'color', 'description', 'priority', 'status', 'targetDate']
   if (entityKind.value === 'milestone') return ['reason', 'projectId', 'title', 'description', 'targetDate', 'status', 'progressMode', 'progress']
@@ -82,6 +83,7 @@ function reset() {
 
 function editableDefaults() {
   const target = existingTarget()
+  if (entityKind.value === 'quarterGoal') return target ? { title: target.title } : {}
   if (entityKind.value === 'project' && !isCompletion.value) return target ? {
     name: target.name, color: target.color, description: target.description, priority: target.priority,
     status: target.status, targetDate: target.targetDate,
@@ -101,6 +103,7 @@ function editableDefaults() {
 
 function existingTarget(): any {
   if (!props.action.targetId) return null
+  if (entityKind.value === 'quarterGoal') return props.document.quarterGoals.find(item => item.id === props.action.targetId && item.deletedAt === null) ?? null
   if (entityKind.value === 'project') return props.document.projects.find(item => item.id === props.action.targetId && item.deletedAt === null) ?? null
   if (entityKind.value === 'milestone') return props.document.milestones.find(item => item.id === props.action.targetId && item.deletedAt === null) ?? null
   return props.document.tasks.find(item => item.id === props.action.targetId && item.deletedAt === null) ?? null
@@ -235,6 +238,7 @@ function isCreateAction(action: AgentAction) {
 }
 
 function typeLabel() {
+  if (entityKind.value === 'quarterGoal') return '季度目标改名'
   const entity = entityKind.value === 'project' ? '项目' : entityKind.value === 'milestone' ? '里程碑' : '任务'
   if (isDelete.value) return `移入回收站 · ${entity}`
   if (isCompletion.value) return `完成状态 · ${entity}`
@@ -268,6 +272,10 @@ function typeLabel() {
           <textarea v-model="form.reason" data-agent-field="reason" class="agent-control" rows="3" :aria-invalid="Boolean(issueFor('reason'))" :aria-describedby="describedBy('reason')" />
         </label>
 
+        <template v-if="entityKind === 'quarterGoal'">
+          <p>{{ existingTarget()?.quarter }} · 原名称：{{ existingTarget()?.title }}</p>
+          <label class="agent-field agent-field-wide"><span>新名称</span><input v-model="form.title" data-agent-field="title" class="agent-control" maxlength="160" /></label>
+        </template>
         <template v-if="entityKind === 'project' && !isCompletion">
           <label class="agent-field agent-field-wide"><span>项目名称</span><input v-model="form.name" data-agent-field="name" class="agent-control" :aria-invalid="Boolean(issueFor('name'))" :aria-describedby="describedBy('name')"></label>
           <label class="agent-field"><span>颜色</span><input v-model="form.color" data-agent-field="color" class="agent-control" type="color" :aria-invalid="Boolean(issueFor('color'))" :aria-describedby="describedBy('color')"></label>

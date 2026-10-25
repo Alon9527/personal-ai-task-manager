@@ -171,6 +171,7 @@ describe('Agent plan schema', () => {
       existingBase('updateTask', 'update-task', TASK_ID, { title: '任务新标题', estimatedMinutes: 45 }),
       existingBase('setTaskCompleted', 'complete-task', TASK_ID, { completed: false }),
       existingBase('deleteTask', 'delete-task', TASK_ID, {}),
+      existingBase('renameQuarterGoal', 'rename-goal', TASK_ID, { title: '年度交付' }),
     ]
 
     const parsed = agentPlanDraftSchema.parse(draft(actions))

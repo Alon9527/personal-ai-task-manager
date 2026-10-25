@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useAgentConversation } from '../composables/useAgentConversation'
 import {
   deriveQuarterMetrics,
   goalsForQuarter,
@@ -28,6 +29,8 @@ const selectedQuarter = ref<QuarterKey>(
     ? queryQuarter as QuarterKey
     : currentQuarter,
 )
+const agentConversation = useAgentConversation()
+watch(selectedQuarter, quarter => { agentConversation.year.value = Number(quarter.slice(0, 4)) }, { immediate: true })
 
 const quarterOptions = computed<QuarterKey[]>(() => {
   const quarters = new Set<QuarterKey>([currentQuarter])

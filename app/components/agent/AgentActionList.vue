@@ -17,6 +17,7 @@ const emit = defineEmits<{
 }>()
 
 const groups = computed(() => [
+  { key: 'quarterGoal', label: '季度目标改名', actions: props.actions.filter(action => entityKind(action) === 'quarterGoal') },
   { key: 'project', label: '项目改动', actions: props.actions.filter(action => entityKind(action) === 'project') },
   { key: 'milestone', label: '里程碑改动', actions: props.actions.filter(action => entityKind(action) === 'milestone') },
   { key: 'task', label: '任务改动', actions: props.actions.filter(action => entityKind(action) === 'task') },
@@ -41,6 +42,7 @@ const dependencyActions = computed(() => {
 })
 
 function entityKind(action: AgentAction) {
+  if (action.type === 'renameQuarterGoal') return 'quarterGoal'
   if (action.type.endsWith('Project')) return 'project'
   if (action.type.endsWith('Milestone')) return 'milestone'
   return 'task'
@@ -75,6 +77,7 @@ function safeId(value: string) {
 }
 
 function actionVerb(action: AgentAction) {
+  if (action.type === 'renameQuarterGoal') return '改名'
   if (action.type.startsWith('create')) return '新建'
   if (action.type.startsWith('update')) return '修改'
   if (action.type === 'setProjectCompleted' || action.type === 'setMilestoneCompleted' || action.type === 'setTaskCompleted') {
@@ -95,11 +98,16 @@ function actionTitle(action: AgentAction) {
 }
 
 function entityKindLabel(action: AgentAction) {
+  if (action.type === 'renameQuarterGoal') return '季度目标'
   const kind = entityKind(action)
   return kind === 'project' ? '项目' : kind === 'milestone' ? '里程碑' : '任务'
 }
 
 function relationText(action: AgentAction) {
+  if (action.type === 'renameQuarterGoal') {
+    const goal = props.document.quarterGoals.find(item => item.id === action.targetId)
+    return goal ? `${goal.quarter} · 原名称：${goal.title} → ${action.payload.title}` : '目标已不存在'
+  }
   if (action.type === 'createMilestone') return referenceText(action.payload.projectId, '项目')
   if (action.type === 'createTask') {
     const project = referenceText(action.payload.projectId, '项目')

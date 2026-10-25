@@ -7,6 +7,8 @@ import { askAi, buildMiniMaxWorkspaceContext, generateAiBrief } from './minimax'
 import type { MiniMaxAnswer } from './minimax'
 import { aiModelTargetSchema } from './ai-model-target'
 import type { AiModelTarget } from './ai-model-target'
+import { conversationRequestSchema } from './agent-conversation'
+import type { ConversationRequest } from './agent-conversation'
 import { agentPlanDraftSchema } from './agent-plan-schema'
 import type { AgentPlanDraftV1 } from './agent-plan-schema'
 import { validateAgentPlan } from './agent-plan-validation'
@@ -53,12 +55,13 @@ export function saveAiProposal(sink: PlanSink, candidate: AgentPlanDraftV1, conf
 }
 
 export type AiProposal = {
+  sourceDocument?: WorkspaceDocument
   response: MiniMaxAnswer
   draft: AgentPlanDraftV1 | null
   error: string | null
 }
 type Outcome<T> = ({ status: 'ready', value: T } | { status: 'failed', error: string }) & { isCurrent: () => boolean }
-type AskInput = { question: string, target: AiModelTarget, taskIds?: string[], images?: string[] }
+type AskInput = { question: string, target: AiModelTarget, taskIds?: string[], images?: string[], conversation?: ConversationRequest, goalIds?: string[], year?: number }
 
 /** Owns generation only. It cannot execute a plan or mutate a workspace. */
 export function createAiGeneration(readDocument: () => Promise<WorkspaceDocument>) {
@@ -99,7 +102,7 @@ export function createAiGeneration(readDocument: () => Promise<WorkspaceDocument
 
   function proposal(response: MiniMaxAnswer, question: string, document: WorkspaceDocument): AiProposal {
     try {
-      return { response, draft: response.actions.length ? buildAiPlanDraft(response, question, document) : null, error: null }
+      return { response, sourceDocument: document, draft: response.actions.length ? buildAiPlanDraft(response, question, document) : null, error: null }
     }
     catch (cause) {
       return { response, draft: null, error: aiErrorMessage(cause) }
@@ -112,10 +115,15 @@ export function createAiGeneration(readDocument: () => Promise<WorkspaceDocument
       const question = input.question
       const ids = input.taskIds ? new Set(input.taskIds) : null
       const images = input.images ? [...input.images] : []
+      const conversation = input.conversation ? conversationRequestSchema.parse(input.conversation) : undefined
+      const goalIds = [...(input.goalIds ?? []), ...(conversation?.pendingPlan?.actions.filter(a => a.type === 'renameQuarterGoal').map(a => a.targetId!) ?? [])]
+      const year = input.year
       const document = await snapshot()
       if (!current()) return null
-      const context = buildMiniMaxWorkspaceContext(ids ? { ...document, tasks: document.tasks.filter(task => ids.has(task.id)) } : document)
-      const response = await askAi(context, question, target, ...(images.length ? [images] : []))
+      const context = buildMiniMaxWorkspaceContext(ids ? { ...document, tasks: document.tasks.filter(task => ids.has(task.id)) } : document, undefined, { goalIds, year })
+      const response = conversation
+        ? await askAi(context, question, target, images, conversation)
+        : await askAi(context, question, target, ...(images.length ? [images] : []))
       if (!current()) return null
       return proposal(response, question, document)
     })

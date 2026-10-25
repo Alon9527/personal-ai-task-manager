@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import VoiceInputButton from '../workspace/VoiceInputButton.vue'
+import AgentConversation from '../agent/AgentConversation.vue'
+import { useAgentConversation } from '../../composables/useAgentConversation'
 import ModelProviderDialog from './ModelProviderDialog.vue'
 import {
   getMiniMaxStatus,
@@ -34,6 +36,7 @@ import type {
 const workspace = useWorkspace()
 const ui = useWorkspaceUi()
 const agentPlan = useAgentPlan()
+const chat = useAgentConversation()
 const router = useRouter()
 const route = useRoute()
 const generation = createAiGeneration(async () => {
@@ -47,7 +50,7 @@ const region = ref<MiniMaxRegion>('cn')
 const savingKey = ref(false)
 const savingRegion = ref(false)
 const generating = generation.generatingBrief
-const asking = generation.asking
+const asking = computed(() => chat.busy.value || generation.asking.value)
 const removingKey = ref(false)
 const showSettings = ref(false)
 const confirmRemove = ref(false)
@@ -81,7 +84,7 @@ let providerListRequest = 0
 const contextCounts = computed(() => ({
   tasks: Math.min(workspace.tasks.value.length, 80),
   projects: Math.min(workspace.projects.value.length, 50),
-  goals: Math.min(workspace.quarterGoals.value.length, 20),
+  goals: Math.min(workspace.quarterGoals.value.length, 80),
 }))
 const configured = computed(() => status.value?.available && status.value.configured)
 const isBuiltInTarget = computed(() => selectedTarget.value.kind === 'minimax')
@@ -153,6 +156,7 @@ function focusReplanQuestion() {
 }
 
 onBeforeUnmount(() => {
+  chat.cancel()
   generation.dispose()
   providerListRequest++
   if (replanFocusTimer) clearTimeout(replanFocusTimer)
@@ -335,10 +339,8 @@ async function submitQuestion() {
   if (!submitted || asking.value || !ready.value) return
   error.value = null
   resetProposalPresentation()
-  const result = await generation.ask({ question: submitted, target: selectedTarget.value })
-  if (!result?.isCurrent()) return
-  if (result.status === 'failed') error.value = result.error
-  else acceptProposal(result.value, submitted)
+  const sent = await chat.send({ question: submitted, target: selectedTarget.value })
+  if (sent && question.value.trim() === submitted) question.value = ''
 }
 
 function appendQuestionVoice(text: string) {
@@ -358,6 +360,7 @@ function changeTarget(event: Event) {
 }
 
 function invalidateAiPresentation() {
+  chat.cancel()
   generation.invalidate()
   brief.value = null
   answer.value = null
@@ -813,6 +816,7 @@ function errorDetail(cause: unknown) {
           </div>
         </section>
       </template>
+      <AgentConversation />
     </div>
 
     <form v-if="ready" class="ask-ai" @submit.prevent="submitQuestion">

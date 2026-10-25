@@ -8,6 +8,8 @@ import { aiModelTargetSchema } from './ai-model-target'
 import type { AiModelTarget } from './ai-model-target'
 import { DEFAULT_MINIMAX_MODEL } from './minimax-model'
 import type { MiniMaxModel } from './minimax-model'
+import { conversationRequestSchema } from './agent-conversation'
+import type { ConversationRequest } from './agent-conversation'
 
 export const MINIMAX_MODEL = DEFAULT_MINIMAX_MODEL
 export const MINIMAX_CONTEXT_TASK_LIMIT = 80
@@ -61,6 +63,7 @@ export interface MiniMaxContextGoal {
   description: string
   progress: number
   status: 'active' | 'completed' | 'paused'
+  updatedAt: string
 }
 
 export interface MiniMaxWorkspaceContext {
@@ -72,6 +75,7 @@ export interface MiniMaxWorkspaceContext {
 }
 
 export interface MiniMaxStatus {
+  connectionRevision?: string
   available: boolean
   configured: boolean
   model: string
@@ -131,6 +135,7 @@ export interface MiniMaxAnswer {
 export function buildMiniMaxWorkspaceContext(
   document: WorkspaceDocument,
   generatedAt = new Date().toISOString(),
+  options: { goalIds?: string[], year?: number } = {},
 ): MiniMaxWorkspaceContext {
   const projects = document.projects
     .filter(project => project.deletedAt === null)
@@ -180,10 +185,14 @@ export function buildMiniMaxWorkspaceContext(
       completed: task.completedAt !== null,
       updatedAt: task.updatedAt,
     }))
+  const required = new Set(options.goalIds ?? [])
+  if (required.size > 80) throw new Error('一次最多分析 80 个季度目标，请缩小选择范围。')
+  if ([...required].some(id => !document.quarterGoals.some(g => g.id === id && g.deletedAt === null))) throw new Error('所选季度目标已不存在，请重新选择。')
+  const goalRank = (goal: WorkspaceDocument['quarterGoals'][number]) => required.has(goal.id) ? 0 : options.year && goal.quarter.startsWith(`${options.year}-`) ? 1 : 2
   const quarterGoals = document.quarterGoals
     .filter(goal => goal.deletedAt === null)
-    .sort((left, right) => left.sortOrder - right.sortOrder)
-    .slice(0, 20)
+    .sort((left, right) => goalRank(left) - goalRank(right) || left.sortOrder - right.sortOrder || left.id.localeCompare(right.id))
+    .slice(0, 80)
     .map(goal => ({
       id: goal.id,
       quarter: goal.quarter,
@@ -191,6 +200,7 @@ export function buildMiniMaxWorkspaceContext(
       description: clip(goal.description, 1200),
       progress: goal.progress,
       status: goal.status,
+      updatedAt: goal.updatedAt,
     }))
 
   return { generatedAt, projects, milestones, tasks, quarterGoals }
@@ -329,6 +339,7 @@ export async function askAi(
   question: string,
   target: AiModelTarget,
   images: string[] = [],
+  conversation?: ConversationRequest,
 ): Promise<MiniMaxAnswer> {
   if (!isMiniMaxDesktop()) throw new Error('AI 问答仅在 Windows 桌面版中可用')
   const normalized = clip(question.trim(), 1000)
@@ -336,7 +347,7 @@ export async function askAi(
   const trustedTarget = aiModelTargetSchema.parse(target)
   const checkedImages = z.array(z.string().max(7_000_000).regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/)).max(4).parse(images)
   const response = await invoke('ai_ask', {
-    request: { context, question: normalized, target: trustedTarget, ...(checkedImages.length ? { images: checkedImages } : {}) },
+    request: { context, question: normalized, target: trustedTarget, ...(checkedImages.length ? { images: checkedImages } : {}), ...(conversation ? conversationRequestSchema.parse(conversation) : {}) },
   })
   return miniMaxAnswerSchema.parse(response)
 }

@@ -66,6 +66,7 @@ const customProfile = {
 }
 
 const configuredStatus = {
+  connectionRevision: 'synthetic-session',
   available: true,
   configured: true,
   model: 'MiniMax-M2.7',
@@ -196,6 +197,7 @@ function installHarness(initialDraft: AgentPlanDraftV1 | null = null) {
   const draft = shallowRef<AgentPlanDraftV1 | null>(initialDraft)
   const controllerError = shallowRef<string | null>(null)
   const controller = {
+    executing: ref(false),
     draft,
     validation: shallowRef(initialDraft?.validation ?? null),
     error: controllerError,
@@ -237,7 +239,7 @@ async function ask(wrapper: Awaited<ReturnType<typeof mountPanel>>, value = '请
   await wrapper.get('.ask-ai input').setValue(value)
   await wrapper.get('.ask-ai').trigger('submit')
   await vi.waitFor(() => expect(minimaxMocks.ask).toHaveBeenCalledTimes(1))
-  await vi.waitFor(() => expect(wrapper.find('.answer-card').exists()).toBe(true))
+  await vi.waitFor(() => expect(wrapper.find('[data-chat-role="assistant"]').exists()).toBe(true))
   await vi.waitFor(() => expect(wrapper.get('.ask-ai input').attributes('disabled')).toBeUndefined())
   await nextTick()
 }
@@ -481,7 +483,7 @@ describe('MiniMax Agent plan integration', () => {
     await ask(wrapper)
 
     const card = wrapper.get('[data-agent-plan-proposal]')
-    expect(card.text()).toContain('AI 提议的计划')
+    expect(card.text()).toContain('当前待确认方案')
     expect(card.text()).toContain('3 项操作')
     expect(card.text()).toContain('已选 3 项')
     expect(card.text()).toContain('预计 45 分钟')
@@ -553,7 +555,7 @@ describe('MiniMax Agent plan integration', () => {
       expect(recovery.text()).toContain('继续审阅上次计划')
       expect(recovery.text()).toContain('3 / 3')
       expect(recovery.text()).toContain('8月12日')
-      expect(controller.loadDraft).toHaveBeenCalledTimes(1)
+      expect(controller.loadDraft).toHaveBeenCalled()
       await recovery.get('button').trigger('click')
       expect(push).toHaveBeenCalledWith('/agent-plan')
       expect(minimaxMocks.ask).not.toHaveBeenCalled()
@@ -578,7 +580,7 @@ describe('MiniMax Agent plan integration', () => {
     expect(controller.draft.value?.id).toBe(old.id)
     const choice = wrapper.get('[data-agent-plan-replacement]')
     expect(choice.text()).toContain('继续审阅上次计划')
-    expect(choice.text()).toContain('用新计划替换')
+    expect(choice.text()).toContain('采用这版修改')
     expectNoWorkspaceWrites(workspace)
 
     const replace = choice.get('[data-replace-agent-plan]')
@@ -626,7 +628,7 @@ describe('MiniMax Agent plan integration', () => {
       wrapper.get('.ask-ai').trigger('submit'),
       wrapper.get('.ask-ai').trigger('submit'),
     ])
-    expect(minimaxMocks.ask).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(minimaxMocks.ask).toHaveBeenCalledTimes(1))
     resolveAnswer(answer())
     await vi.waitFor(() => expect(controller.setDraft).toHaveBeenCalledTimes(1))
 

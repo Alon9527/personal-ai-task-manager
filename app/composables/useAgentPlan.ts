@@ -1,6 +1,7 @@
 import { shallowRef, toRaw } from 'vue'
 import { workspaceDocumentSchema } from '#shared/workspace'
-import type { Milestone, Project, Task, WorkspaceDocument } from '#shared/workspace'
+import type { Milestone, Project, Task, QuarterGoal, WorkspaceDocument } from '#shared/workspace'
+import { planContentRevision } from '../services/agent-conversation'
 import { useWorkspace } from './useWorkspace'
 import { WorkspaceError } from '../data/workspace-gateway'
 import type { WorkspaceModel } from '../models/workspace-model'
@@ -57,6 +58,10 @@ export type AgentPlanControllerDependencies = {
   validate?: typeof validateAgentPlan
   simulate?: typeof simulateAgentPlan
 }
+type ExecutionObserver = {
+  before: () => void
+  after: (plan: AgentPlanDraftV1, before: WorkspaceDocument, results: AgentActionResult[]) => void
+}
 
 type ActionPatch = Record<string, unknown> & {
   payload?: Record<string, unknown>
@@ -88,6 +93,8 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
   let dangerRevision: string | null = null
   let dangerWorkspaceRevision: string | null = null
   let durablyAppliedRevision: string | null = null
+  const executionObservers = new Set<ExecutionObserver>()
+  function subscribeExecution(observer: ExecutionObserver) { executionObservers.add(observer); return () => executionObservers.delete(observer) }
 
   function visibleDocument(): WorkspaceDocument {
     return structuredClone(workspaceDocumentSchema.parse(toRaw(workspace.document.value)))
@@ -349,10 +356,12 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
 
   async function runExecution(
     confirmedToken: string | null = null,
+    expectedRevision?: string,
   ): Promise<AgentPlanExecutionResponse> {
     if (executing.value) return { status: 'busy' }
     const initial = draft.value
     if (!initial) return { status: 'no-draft' }
+    if (expectedRevision !== undefined && expectedRevision !== planContentRevision(initial)) return { status: 'confirmation-stale' }
     if (initial.status === 'applied' || durablyAppliedRevision === revisionOf(initial)) {
       return { status: 'already-applied' }
     }
@@ -372,6 +381,7 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
     try {
       if (workspace.hasAppliedPlan && await workspace.hasAppliedPlan(initial.id)) return acknowledgeApplied(initial)
       const latest = await workspace.readLatestDocument()
+      if (expectedRevision !== undefined && (!draft.value || expectedRevision !== planContentRevision(draft.value))) return { status: 'confirmation-stale' }
       if (confirmedToken !== null && workspaceRevisionOf(latest) !== dangerWorkspaceRevision) {
         clearConfirmation()
         return { status: 'confirmation-stale' }
@@ -410,7 +420,11 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
 
       const prepared = persistExecutionCheck(initial, structural, 'draft')
       const simulated = simulate(prepared, latest)
+      for (const observer of executionObservers) observer.before()
       await workspace.replaceWorkspaceDocument(simulated.document, latest, prepared.id)
+      for (const observer of executionObservers) {
+        try { observer.after(prepared, latest, simulated.results) } catch { /* Commit is authoritative; observers must not turn success into retry. */ }
+      }
       const applied = agentPlanDraftSchema.parse({ ...prepared, status: 'applied' })
       draft.value = structuredClone(applied)
       validation.value = structuredClone(structural)
@@ -458,8 +472,8 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
     }
   }
 
-  function requestExecution() {
-    return runExecution()
+  function requestExecution(expectedRevision?: string) {
+    return runExecution(null, expectedRevision)
   }
 
   function confirmDangerousExecution(confirmationToken: string) {
@@ -633,6 +647,7 @@ export function createAgentPlanController(dependencies: AgentPlanControllerDepen
     resolveDeselectedDependency,
     discardDraft,
     requestExecution,
+    subscribeExecution,
     confirmDangerousExecution,
     cancelDangerousConfirmation,
     reloadConflictedAction,
@@ -699,11 +714,7 @@ function isCreateAction(action: AgentAction): action is Extract<AgentAction, {
 }
 
 function revisionOf(plan: AgentPlanDraftV1) {
-  const selectedDeletes = plan.actions
-    .filter(action => action.selected && action.dangerous)
-    .map(action => action.actionId)
-    .sort()
-  return JSON.stringify([plan.id, plan.updatedAt, selectedDeletes])
+  return planContentRevision(plan)
 }
 
 function workspaceRevisionOf(document: WorkspaceDocument) {
@@ -728,17 +739,19 @@ type ExistingAction = Exclude<AgentAction, {
   type: 'createProject' | 'createMilestone' | 'createTask'
 }>
 
-type ReloadRecord = Project | Milestone | Task
+type ReloadRecord = Project | Milestone | Task | QuarterGoal
 
 function expectedOwnerForReload(action: ExistingAction, document: WorkspaceDocument) {
   return findReloadRecord(action, document)?.ownerId
     ?? document.projects[0]?.ownerId
     ?? document.milestones[0]?.ownerId
     ?? document.tasks[0]?.ownerId
+    ?? document.quarterGoals[0]?.ownerId
     ?? null
 }
 
 function findReloadRecord(action: ExistingAction, document: WorkspaceDocument): ReloadRecord | undefined {
+  if (action.type === 'renameQuarterGoal') return document.quarterGoals.find(item => item.id === action.targetId)
   if (action.type.endsWith('Project')) return document.projects.find(item => item.id === action.targetId)
   if (action.type.endsWith('Milestone')) return document.milestones.find(item => item.id === action.targetId)
   return document.tasks.find(item => item.id === action.targetId)
@@ -751,7 +764,7 @@ function reloadTarget(
 ): { ok: true, record: ReloadRecord } | { ok: false, message: string } {
   const record = findReloadRecord(action, document)
   if (!record) {
-    const existsAsDifferentType = [...document.projects, ...document.milestones, ...document.tasks]
+    const existsAsDifferentType = [...document.projects, ...document.milestones, ...document.tasks, ...document.quarterGoals]
       .some(item => item.id === action.targetId)
     return { ok: false, message: existsAsDifferentType ? '目标记录类型已不匹配，不能重新载入。' : '目标记录已不存在，不能重新载入。' }
   }
@@ -788,6 +801,7 @@ function reloadSnapshot(record: ReloadRecord, document: WorkspaceDocument) {
 }
 
 function reloadPayload(action: ExistingAction, record: ReloadRecord): AgentAction['payload'] {
+  if (action.type === 'renameQuarterGoal') return { title: (record as QuarterGoal).title }
   if (action.type === 'deleteProject' || action.type === 'deleteMilestone' || action.type === 'deleteTask') return {}
   if (action.type === 'setProjectCompleted') return { completed: (record as Project).status === 'completed' }
   if (action.type === 'setMilestoneCompleted') return { completed: (record as Milestone).status === 'completed' }
