@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Focus 个人任务管理器",
-  "version": "0.3.19",
+  "version": "0.3.20",
   "identifier": "com.focusai.taskmanager",
   "build": {
     "beforeDevCommand": "pnpm dev --port 3000",
@@ -47,6 +47,8 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
+        "installerIcon": "icons/focus/icon.ico",
+        "uninstallerIcon": "icons/focus/icon.ico",
         "languages": [
           "SimpChinese",
           "English"

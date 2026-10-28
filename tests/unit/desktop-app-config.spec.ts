@@ -1,6 +1,20 @@
 import { readFile } from 'node:fs/promises'
 
 describe('desktop application configuration', () => {
+  it.each(['installerIcon', 'uninstallerIcon'] as const)('brands the NSIS %s with the FOCUS application icon', async (field) => {
+    const config = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8')) as {
+      bundle: { icon: string[]; windows: { nsis: Record<string, unknown> } }
+    }
+    const iconPath = config.bundle.windows.nsis[field]
+
+    expect(iconPath).toBe('icons/focus/icon.ico')
+    expect(config.bundle.icon).toContain(iconPath)
+    const icon = await readFile(`src-tauri/${iconPath}`)
+    expect(icon.readUInt16LE(0)).toBe(0)
+    expect(icon.readUInt16LE(2)).toBe(1)
+    expect(icon.readUInt16LE(4)).toBeGreaterThan(0)
+  })
+
   it('keeps desktop build scripts explicit and reproducible', async () => {
     const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {
       scripts?: Record<string, string>
