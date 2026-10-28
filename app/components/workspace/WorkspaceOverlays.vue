@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import TaskEditorDialog from './TaskEditorDialog.vue'
 import ProjectEditorDialog from './ProjectEditorDialog.vue'
 import MilestoneEditorDialog from './MilestoneEditorDialog.vue'
@@ -12,6 +12,9 @@ import type { CreateMilestoneInput, CreateProjectInput, CreateQuarterGoalInput, 
 
 const workspace = useWorkspace()
 const ui = useWorkspaceUi()
+const taskSaving = ref(false)
+const taskSaveError = ref('')
+watch(() => ui.taskEditor.value, () => { taskSaveError.value = '' })
 const selectedTask = computed(() => workspace.tasks.value.find(task => task.id === ui.taskEditor.value.taskId) ?? null)
 const selectedProject = computed(() => workspace.projects.value.find(project => project.id === ui.projectEditor.value.projectId) ?? null)
 const selectedMilestone = computed(() => workspace.milestones.value.find(milestone => milestone.id === ui.milestoneEditor.value.milestoneId) ?? null)
@@ -45,9 +48,20 @@ const deleteRecord = computed(() => {
 })
 
 async function saveTask(input: CreateTaskInput) {
-  if (selectedTask.value) await workspace.updateTask(selectedTask.value.id, input)
-  else await workspace.createTask(input)
-  ui.closeTaskEditor()
+  if (taskSaving.value) return
+  if (workspace.updateLocked?.value) { taskSaveError.value = '正在准备更新，请等待更新完成后再保存。'; return }
+  taskSaving.value = true
+  taskSaveError.value = ''
+  const session = ui.taskEditor.value
+  const taskId = selectedTask.value?.id
+  try {
+    if (taskId) await workspace.updateTask(taskId, input)
+    else await workspace.createTask(input)
+    // A slow save must not close a different editor opened in the meantime.
+    if (ui.taskEditor.value === session) ui.closeTaskEditor()
+  } catch (cause) {
+    if (ui.taskEditor.value === session) taskSaveError.value = cause instanceof Error ? cause.message : '保存失败，请重试'
+  } finally { taskSaving.value = false }
 }
 
 async function saveProject(input: CreateProjectInput) {
@@ -90,9 +104,12 @@ async function confirmDelete() {
     :milestones="workspace.milestones.value"
     :default-project-id="ui.taskEditor.value.defaultProjectId"
     :attachments-enabled="workspace.backendMode.value !== 'supabase'"
+    :saving="taskSaving"
+    :save-error="taskSaveError"
+    :editor-session="ui.taskEditor.value"
     @save="saveTask"
     @delete="ui.askDeleteTask"
-    @close="ui.closeTaskEditor"
+    @close="!taskSaving && ui.closeTaskEditor()"
   />
   <ProjectEditorDialog
     :open="ui.projectEditor.value.open"

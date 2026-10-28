@@ -21,6 +21,9 @@ const props = withDefaults(defineProps<{
   embedded?: boolean
   defaultDate?: string
   defaultTime?: string
+  saving?: boolean
+  saveError?: string
+  editorSession?: object
 }>(), {
   milestones: () => [],
   defaultProjectId: null,
@@ -86,9 +89,16 @@ watch(() => [props.open, form.attachments.map(a => `${a.id}:${a.dataUrl}`).join(
   }
 }, { immediate: true })
 
+let initializedEditor: readonly unknown[] | null = null
 watch(
-  () => [props.open, props.task, props.defaultProjectId] as const,
+  () => [props.open, props.editorSession, props.task?.id, props.defaultProjectId, props.defaultDate, props.defaultTime, props.saving] as const,
   () => {
+    if (props.saving) return
+    const editor = [props.open, props.editorSession, props.task?.id, props.defaultProjectId, props.defaultDate, props.defaultTime] as const
+    // Reload only a different editor session, including switches deferred by a slow save.
+    // A save failure or same-task refresh must leave the user's draft intact.
+    if (initializedEditor?.every((value, index) => value === editor[index])) return
+    initializedEditor = editor
     attachmentGeneration++
     attachmentBusy.value = false
     Object.assign(form, defaultForm(props.task))
@@ -129,7 +139,7 @@ function defaultForm(task: Task | null = null) {
 }
 
 function submit() {
-  if (attachmentBusy.value) return
+  if (attachmentBusy.value || props.saving) return
   form.startDate = normalizeTaskDateInput(form.startDate)
   form.dueDate = normalizeTaskDateInput(form.dueDate)
   form.completionDate = normalizeTaskDateInput(form.completionDate)
@@ -172,12 +182,12 @@ function submit() {
 }
 
 function chooseAttachmentFiles() {
-  if (!props.attachmentsEnabled) return
+  if (!props.attachmentsEnabled || props.saving) return
   attachmentInput.value?.click()
 }
 
 async function handleAttachmentFiles(event: Event) {
-  if (!props.attachmentsEnabled) return
+  if (!props.attachmentsEnabled || props.saving) return
   const input = event.target as HTMLInputElement
   const files = Array.from(input.files ?? [])
   await attachFiles(files)
@@ -185,7 +195,7 @@ async function handleAttachmentFiles(event: Event) {
 }
 
 async function handlePaste(event: ClipboardEvent) {
-  if (!props.attachmentsEnabled) return
+  if (!props.attachmentsEnabled || props.saving) return
   const files = clipboardImages(event.clipboardData)
   if (!files.length) return
   event.preventDefault()
@@ -193,7 +203,7 @@ async function handlePaste(event: ClipboardEvent) {
 }
 
 async function attachFiles(files: File[]) {
-  if (attachmentBusy.value || !props.attachmentsEnabled) return
+  if (attachmentBusy.value || !props.attachmentsEnabled || props.saving) return
   if (files.length === 0) return
   const generation = attachmentGeneration
   attachmentBusy.value = true
@@ -211,7 +221,7 @@ async function attachFiles(files: File[]) {
 }
 
 function removeAttachment(id: string) {
-  if (attachmentBusy.value) return
+  if (attachmentBusy.value || props.saving) return
   form.attachments = form.attachments.filter(attachment => attachment.id !== id)
 }
 
@@ -249,22 +259,23 @@ function toLocalDateTimeInput(value: string | null) {
 
 <template>
   <Teleport to="body" :disabled="embedded">
-    <div v-if="open" :class="embedded ? 'suite-inline-editor' : 'dialog-backdrop'" @click.self="!embedded && emit('close')">
-      <section @paste="handlePaste" class="workspace-dialog task-editor" :role="embedded ? 'region' : 'dialog'" :aria-modal="embedded ? undefined : true" aria-labelledby="task-editor-title">
+    <div v-if="open" :class="embedded ? 'suite-inline-editor' : 'dialog-backdrop'" @click.self="!embedded && !saving && emit('close')">
+      <section @paste="handlePaste" class="workspace-dialog task-editor" :aria-busy="saving || undefined" :role="embedded ? 'region' : 'dialog'" :aria-modal="embedded ? undefined : true" aria-labelledby="task-editor-title">
         <header class="dialog-header">
           <div>
             <small>TASK</small>
             <h2 id="task-editor-title">{{ task ? '编辑任务' : '新建任务' }}</h2>
           </div>
           <div class="task-header-actions">
-            <button v-if="task" type="button" class="task-delete-action" data-delete-task @click="emit('delete', task.id)">删除任务</button>
-            <button type="button" class="secondary-action" @click="emit('close')">取消</button>
-            <button type="submit" :form="formId" class="primary-action" :disabled="attachmentBusy">{{ task ? '保存更改' : '创建任务' }}</button>
+            <button v-if="task" type="button" class="task-delete-action" data-delete-task :disabled="saving" @click="!saving && emit('delete', task.id)">删除任务</button>
+            <button type="button" class="secondary-action" :disabled="saving" @click="!saving && emit('close')">取消</button>
+            <button type="submit" :form="formId" class="primary-action" :disabled="attachmentBusy || saving">{{ saving ? '保存中…' : task ? '保存更改' : '创建任务' }}</button>
           </div>
-          <button type="button" aria-label="关闭" @click="emit('close')"><UIcon name="i-lucide-x" /></button>
+          <button type="button" aria-label="关闭" :disabled="saving" @click="!saving && emit('close')"><UIcon name="i-lucide-x" /></button>
         </header>
 
-        <form :id="formId" v-if="embedded" class="suite-compact-form" @submit.prevent="submit">
+        <p v-if="saveError" role="alert" class="task-save-error">{{ saveError }}</p>
+        <form :id="formId" v-if="embedded" :inert="saving || undefined" class="suite-compact-form" @submit.prevent="submit">
           <label class="form-field"><span>任务标题</span><input v-model="form.title" name="title" placeholder="要推进什么？"></label>
           <fieldset class="task-status-field"><legend>状态</legend><div class="task-status-options" role="radiogroup" aria-label="任务状态"><label v-for="option in taskStatusOptions.filter(o=>!['inbox','cancelled'].includes(o.value))" :key="option.value" :class="{selected:form.status===option.value}"><input v-model="form.status" type="radio" name="status-choice" :value="option.value"><span>{{option.label}}</span></label></div></fieldset>
           <fieldset class="task-status-field"><legend>重要性</legend><div class="task-status-options" role="radiogroup" aria-label="重要性"><label :class="{selected:form.importance==='normal'}"><input v-model="form.importance" type="radio" value="normal"><span>普通</span></label><label :class="{selected:form.importance==='important'}"><input v-model="form.importance" type="radio" value="important"><span>重要</span></label></div></fieldset>
@@ -275,7 +286,7 @@ function toLocalDateTimeInput(value: string | null) {
           <details class="suite-editor-more"><summary>项目、里程碑与更多选项</summary><label class="form-field"><span>项目</span><select v-model="form.projectId"><option value="">无项目</option><option v-for="p in projects" :key="p.id" :value="p.id">{{p.name}}</option></select></label><label class="form-field"><span>里程碑</span><select v-model="form.milestoneId"><option value="">无里程碑</option><option v-for="m in filteredMilestones" :key="m.id" :value="m.id">{{m.title}}</option></select></label><label class="form-field"><span>优先级</span><select v-model="form.priority"><option value="">未设置</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label><label><input v-model="form.isFocus" type="checkbox">今日重点</label></details>
           <p v-if="validationError" role="alert" class="inline-error">{{validationError}}</p>
         </form>
-        <form :id="formId" v-else @submit.prevent="submit">
+        <form :id="formId" v-else :inert="saving || undefined" @submit.prevent="submit">
           <label class="form-field form-field-wide">
             <span>任务标题</span>
             <input v-model="form.title" name="title" autofocus placeholder="要推进什么？">
@@ -372,6 +383,8 @@ function toLocalDateTimeInput(value: string | null) {
 </template>
 
 <style scoped>
+.task-save-error{margin:10px 20px;color:#b42318;font-size:13px}
+.task-header-actions button:disabled{opacity:.6;cursor:wait}
 .task-editor .suite-date-fields{grid-template-columns:minmax(0,1fr)}
 .task-header-actions{display:flex;gap:8px;margin-left:auto}.task-header-actions button{width:auto;height:auto;padding:9px 14px;font-size:14px;white-space:nowrap}
 .task-delete-action{border:1px solid #efc8cc;border-radius:7px;background:#fff5f5;color:#bd3847;cursor:pointer}

@@ -186,7 +186,7 @@ function installHarness(initial: AgentPlanDraftV1 | null = draft()) {
   injected.controller = controller
   injected.workspace = {
     ...workspace,
-    ready: ref(true), loading: ref(false), saving: ref(false), error: ref(null),
+    ready: ref(true), loading: ref(false), saving: ref(false), updateLocked: ref(false), error: ref(null),
     projects: ref(document.projects), milestones: ref(document.milestones), tasks: ref(document.tasks),
     quarterGoals: ref([]), projectCounts: ref({ [PROJECT_ID]: 1 }), trashCount: ref(0),
     load: vi.fn(), backendLabel: ref('本机数据'), backendMode: ref('local'), fallbackReason: ref(null), lastDeleted: ref(null),

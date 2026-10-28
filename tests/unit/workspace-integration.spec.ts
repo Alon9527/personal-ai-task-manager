@@ -11,7 +11,7 @@ describe('workspace UI integration', () => {
 
     await vi.waitFor(() => expect(wrapper.find('[data-backend-mode]').exists()).toBe(true))
     expect(wrapper.get('[data-backend-mode]').text()).toContain('本机数据')
-    expect(wrapper.findAll('[data-task-row]')).toHaveLength(7)
+    expect(wrapper.findAll('[data-task-row]')).toHaveLength(5)
 
     await wrapper.get('[data-quick-add] input').setValue('整理本周复盘')
     await wrapper.get('[data-quick-add]').trigger('submit')

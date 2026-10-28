@@ -33,6 +33,8 @@ export interface WorkspaceGateway {
   loadWorkspace(options?: { includeDeleted?: boolean }): Promise<WorkspaceDocument>
   replaceWorkspaceDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>
   recoverWorkspaceDocument?(document: WorkspaceDocument): Promise<WorkspaceDocument>
+  /** Durable recovery snapshot of latest saved data; must not use a renderer cache. */
+  createUpdateBackup?(): Promise<void>
   hasAppliedPlan?(planId: string): Promise<boolean>
   applyAgentPlan?(document: WorkspaceDocument, expected: WorkspaceDocument, planId: string): Promise<WorkspaceDocument>
   clearWorkspaceData(): Promise<void>

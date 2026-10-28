@@ -180,6 +180,55 @@ describe('MiniMax workspace context', () => {
     expect(context.milestones).toHaveLength(80)
   })
 
+  it('includes the saved planning fields without changing task identity or the source document', () => {
+    const document = workspace()
+    Object.assign(document.tasks[0]!, {
+      status: 'waiting',
+      importance: 'normal',
+      startDate: '2026-08-04',
+      estimatedMinutes: 45,
+    })
+    const before = JSON.stringify(document)
+
+    expect(buildMiniMaxWorkspaceContext(document, NOW).tasks[0]).toMatchObject({
+      id: document.tasks[0]!.id,
+      status: 'waiting',
+      importance: 'normal',
+      startDate: '2026-08-04',
+      estimatedMinutes: 45,
+      completed: false,
+      updatedAt: NOW,
+    })
+    expect(JSON.stringify(document)).toBe(before)
+  })
+
+  it.each([
+    ['cancelled', NOW, false],
+    ['done', null, true],
+    ['in_progress', NOW, false],
+  ] as const)('derives completed from explicit %s status, not a legacy timestamp', (status, completedAt, completed) => {
+    const document = workspace()
+    Object.assign(document.tasks[0]!, { status, completedAt })
+
+    expect(buildMiniMaxWorkspaceContext(document, NOW).tasks[0]).toMatchObject({ status, completed })
+  })
+
+  it.each([
+    [null, 'high', 'todo', 'important', false],
+    [NOW, null, 'done', 'normal', true],
+  ] as const)('supplies planning defaults for legacy tasks completed at %s', (completedAt, priority, status, importance, completed) => {
+    const document = workspace()
+    Object.assign(document.tasks[0]!, { completedAt, priority })
+
+    expect(buildMiniMaxWorkspaceContext(document, NOW).tasks[0]).toMatchObject({
+      status,
+      importance,
+      startDate: null,
+      estimatedMinutes: null,
+      completed,
+    })
+  })
+
   it('converts a validated suggestion into the existing task CRUD input', () => {
     const input = suggestionToTaskInput({
       rationale: '先拆成一个可完成的小步骤',

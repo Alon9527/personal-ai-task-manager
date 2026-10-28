@@ -57,6 +57,33 @@ describe('desktop updater', () => {
     const { checkDesktopUpdate } = await import('../../app/services/app-updater')
     const result = await checkDesktopUpdate()
     if (result.status !== 'available') throw new Error('Expected available update')
-    await expect(result.install(vi.fn())).rejects.toThrow('signature verification failed')
+    await expect(result.install(vi.fn())).rejects.toMatchObject({ code: 'signature', message: expect.stringContaining('签名') })
+  })
+
+  it.each([
+    ['error sending request for url (https://user:secret@example.invalid/latest.json?token=hidden)', 'network', '网络'],
+    ['failed to fetch update endpoint https://example.invalid/latest.json?api_key=hidden: connection timed out', 'network', '网络'],
+    ['failed to fetch update manifest: connection timed out', 'network', '网络'],
+    ['updater configuration error: invalid endpoint URL', 'configuration', '清单或配置'],
+    ['could not deserialize update manifest: missing field signature', 'configuration', '清单或配置'],
+    ['signature verification failed for https://example.invalid/file.exe?key=hidden', 'signature', '签名'],
+  ])('classifies check failure without exposing sensitive details: %s', async (message, code, label) => {
+    check.mockRejectedValue(new Error(message))
+    const { checkDesktopUpdate } = await import('../../app/services/app-updater')
+    const failure = await checkDesktopUpdate().catch(error => error)
+    expect(failure).toMatchObject({ code, message: expect.stringContaining(label) })
+    expect(failure.message).not.toMatch(/https?:|secret|hidden/)
+  })
+
+  it('reports installer failures separately without leaking key material or adding a fallback', async () => {
+    const downloadAndInstall = vi.fn().mockRejectedValue(new Error('installer exited with status code 5; apiKey=synthetic-private-key'))
+    check.mockResolvedValue({ version: '0.3.6', downloadAndInstall })
+    const { checkDesktopUpdate } = await import('../../app/services/app-updater')
+    const result = await checkDesktopUpdate()
+    if (result.status !== 'available') throw new Error('Expected available update')
+    const failure = await result.install(vi.fn()).catch(error => error)
+    expect(failure).toMatchObject({ code: 'installation', message: expect.stringContaining('安装失败') })
+    expect(failure.message).not.toContain('synthetic-private-key')
+    expect(downloadAndInstall).toHaveBeenCalledOnce()
   })
 })

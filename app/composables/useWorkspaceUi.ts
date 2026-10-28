@@ -1,3 +1,4 @@
+import { computed } from 'vue'
 import type { QuarterKey } from '#shared/workspace'
 import { getCurrentQuarter } from '../utils/today-view'
 type DeleteRequest = { kind: 'project' | 'milestone' | 'task' | 'quarter-goal', id: string } | null
@@ -18,6 +19,16 @@ export function useWorkspaceUi() {
   const workspaceInfoOpen = useState<boolean>('workspace-info-open', () => false)
   const miniMaxBriefRequest = useState<number>('minimax-brief-request', () => 0)
   const dataBridgeDialog = useState<{ open: boolean, tab: 'import' | 'feishu' }>('workspace-data-bridge', () => ({ open: false, tab: 'import' }))
+  const activeEmbeddedEditors = useState<string[]>('workspace-active-embedded-editors', () => [])
+  const hasOpenEditors = computed(() => activeEmbeddedEditors.value.length > 0
+    || [taskEditor, projectEditor, milestoneEditor, quarterGoalEditor, dataBridgeDialog].some(editor => editor.value.open))
+
+  function setEmbeddedEditorActive(instanceId: string, active: boolean) {
+    if (active) {
+      if (!activeEmbeddedEditors.value.includes(instanceId)) activeEmbeddedEditors.value.push(instanceId)
+    }
+    else activeEmbeddedEditors.value = activeEmbeddedEditors.value.filter(id => id !== instanceId)
+  }
 
   function openNewTask(defaultProjectId: string | null = null) {
     taskEditor.value = { open: true, taskId: null, defaultProjectId }
@@ -129,6 +140,8 @@ export function useWorkspaceUi() {
     workspaceInfoOpen,
     miniMaxBriefRequest,
     dataBridgeDialog,
+    hasOpenEditors,
+    setEmbeddedEditorActive,
     openNewTask,
     openEditTask,
     openNewProject,

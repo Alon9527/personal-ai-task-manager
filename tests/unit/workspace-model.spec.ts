@@ -9,6 +9,102 @@ describe('workspace model', () => {
   beforeEach(() => localStorage.clear())
   afterEach(() => vi.useRealTimers())
 
+  it('locks new writes immediately and backs up only after queued saves finish before installing', async () => {
+    let stored = JSON.stringify(createDemoWorkspace())
+    let finishSave!: () => void
+    const backupDocument = vi.fn(async (_json: string) => undefined)
+    const gateway = new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => stored,
+      saveDocument: async next => { stored = next },
+      backupDocument,
+    })
+    const model = createWorkspaceModel(gateway)
+    await model.load()
+    const originalUpdate = gateway.updateTask.bind(gateway)
+    vi.spyOn(gateway, 'updateTask').mockImplementation(async (id, patch) => {
+      await new Promise<void>(resolve => { finishSave = resolve })
+      return originalUpdate(id, patch)
+    })
+    const taskId = model.tasks.value[0]!.id
+    const pendingSave = model.updateTask(taskId, { title: '已完成等待的保存' })
+    await vi.waitFor(() => expect(finishSave).toBeTypeOf('function'))
+    expect(model).toHaveProperty('runUpdateMaintenance')
+    const install = vi.fn(async () => undefined)
+    const updating = model.runUpdateMaintenance(install)
+
+    expect(model.updateLocked.value).toBe(true)
+    await expect(model.updateTask(taskId, { title: '不得写入' })).rejects.toThrow('更新')
+    await expect(model.clearWorkspaceData()).rejects.toThrow('更新')
+    expect(backupDocument).not.toHaveBeenCalled()
+    expect(install).not.toHaveBeenCalled()
+    finishSave()
+    await pendingSave
+    await updating
+
+    expect(JSON.parse(backupDocument.mock.calls[0]![0]).tasks.find((task: { id: string }) => task.id === taskId).title).toBe('已完成等待的保存')
+    expect(backupDocument.mock.invocationCallOrder[0]).toBeLessThan(install.mock.invocationCallOrder[0]!)
+    expect(model.updateLocked.value).toBe(true)
+    await expect(model.runUpdateMaintenance(install)).rejects.toThrow('更新')
+    expect(install).toHaveBeenCalledTimes(1)
+  })
+
+  it('aborts installation on backup failure and unlocks writes for retry', async () => {
+    let stored = JSON.stringify(createDemoWorkspace())
+    const backupDocument = vi.fn().mockRejectedValueOnce(new Error('disk full')).mockResolvedValue(undefined)
+    const model = createWorkspaceModel(new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => stored,
+      saveDocument: async next => { stored = next },
+      backupDocument,
+    }))
+    await model.load()
+    const install = vi.fn(async () => undefined)
+    expect(model).toHaveProperty('runUpdateMaintenance')
+    await expect(model.runUpdateMaintenance(install)).rejects.toThrow('备份')
+    expect(install).not.toHaveBeenCalled()
+    expect(model.updateLocked.value).toBe(false)
+    await model.updateTask(model.tasks.value[0]!.id, { title: '备份失败仍可继续保存' })
+    await model.runUpdateMaintenance(install)
+    expect(install).toHaveBeenCalledOnce()
+  })
+
+  it('unlocks after an installation error and keeps the completed backup for retry', async () => {
+    const stored = JSON.stringify(createDemoWorkspace())
+    const backupDocument = vi.fn(async () => undefined)
+    const model = createWorkspaceModel(new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => stored, saveDocument: async () => undefined, backupDocument,
+    }))
+    await model.load()
+    expect(model).toHaveProperty('runUpdateMaintenance')
+    await expect(model.runUpdateMaintenance(async () => { throw new Error('install failed') })).rejects.toThrow('install failed')
+    expect(model.updateLocked.value).toBe(false)
+    expect(backupDocument).toHaveBeenCalledOnce()
+    await model.runUpdateMaintenance(async () => undefined)
+    expect(model.updateLocked.value).toBe(true)
+  })
+
+  it('does not install if an already queued save fails during update preparation', async () => {
+    const gateway = new LocalWorkspaceGateway(localStorage)
+    const model = createWorkspaceModel(gateway)
+    await model.load()
+    let failSave!: () => void
+    vi.spyOn(gateway, 'updateTask').mockImplementation(async () => {
+      await new Promise<void>(resolve => { failSave = resolve })
+      throw new Error('save failed')
+    })
+    const pendingSave = model.updateTask(model.tasks.value[0]!.id, { title: '无法保存' })
+    const saveResult = pendingSave.catch(error => error)
+    await vi.waitFor(() => expect(failSave).toBeTypeOf('function'))
+    expect(model).toHaveProperty('runUpdateMaintenance')
+    const install = vi.fn(async () => undefined)
+    const updating = model.runUpdateMaintenance(install)
+    const updateResult = expect(updating).rejects.toThrow('保存失败')
+    failSave()
+    expect(await saveResult).toMatchObject({ message: 'save failed' })
+    await updateResult
+    expect(model.updateLocked.value).toBe(false)
+    expect(install).not.toHaveBeenCalled()
+  })
+
   it('imports a portable backup into a healthy new computer and preserves its previous snapshot', async () => {
     const empty = { version: 3, projects: [], milestones: [], tasks: [], quarterGoals: [] }
     localStorage.setItem('personal-ai-workspace:v1', JSON.stringify(empty))

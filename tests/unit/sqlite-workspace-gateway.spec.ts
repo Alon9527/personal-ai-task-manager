@@ -8,6 +8,43 @@ import { workspaceDocumentSchema } from '../../shared/workspace'
 describe('DesktopWorkspaceGateway', () => {
   beforeEach(() => localStorage.clear())
 
+  it('takes an update snapshot from latest persisted data, including trash, rather than cached state', async () => {
+    let stored = JSON.stringify(createDemoWorkspace())
+    const backupDocument = vi.fn(async (_json: string) => undefined)
+    const saveDocument = vi.fn(async () => undefined)
+    const gateway = new DesktopWorkspaceGateway(localStorage, { loadDocument: async () => stored, saveDocument, backupDocument })
+    await gateway.loadWorkspace()
+    saveDocument.mockClear()
+    const latest = JSON.parse(stored)
+    latest.tasks[0].title = '持久层已更新'
+    latest.tasks[0].deletedAt = '2026-10-28T01:00:00.000Z'
+    stored = JSON.stringify(latest)
+    expect(gateway).toHaveProperty('createUpdateBackup')
+
+    await gateway.createUpdateBackup()
+
+    expect(JSON.parse(backupDocument.mock.calls[0]![0])).toEqual(latest)
+    expect(saveDocument).not.toHaveBeenCalled()
+  })
+
+  it.each([null, '{broken'])('refuses to create an update snapshot from an unreadable persisted workspace (%s)', async (stored) => {
+    const backupDocument = vi.fn(async () => undefined)
+    const saveDocument = vi.fn(async () => undefined)
+    const gateway = new DesktopWorkspaceGateway(localStorage, { loadDocument: async () => stored, saveDocument, backupDocument })
+    expect(gateway).toHaveProperty('createUpdateBackup')
+    await expect(gateway.createUpdateBackup()).rejects.toThrow()
+    expect(backupDocument).not.toHaveBeenCalled()
+    expect(saveDocument).not.toHaveBeenCalled()
+  })
+
+  it('requires the durable backup capability before an update', async () => {
+    const gateway = new DesktopWorkspaceGateway(localStorage, {
+      loadDocument: async () => JSON.stringify(createDemoWorkspace()), saveDocument: async () => undefined,
+    })
+    expect(gateway).toHaveProperty('createUpdateBackup')
+    await expect(gateway.createUpdateBackup()).rejects.toThrow('备份')
+  })
+
   it('restores portable files with fresh IDs so damaged existing content cannot block recovery', async () => {
     const id = '40000000-0000-4000-8000-000000000001'
     const portable = createDemoWorkspace()

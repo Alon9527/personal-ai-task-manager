@@ -38,6 +38,7 @@ export function createWorkspaceModel(
   const document = ref<WorkspaceDocument>(emptyWorkspace())
   const loading = ref(false)
   const saving = ref(false)
+  const updateLocked = ref(false)
   const ready = ref(false)
   const recoveryRequired = ref(false)
   const error = ref<string | null>(null)
@@ -46,6 +47,7 @@ export function createWorkspaceModel(
   const lastDeleted = ref<{ kind: 'project' | 'milestone' | 'task' | 'quarter-goal', id: string, label: string } | null>(null)
   let undoDismissTimer: ReturnType<typeof setTimeout> | null = null
   let mutationTail: Promise<void> = Promise.resolve()
+  let mutationFailureCount = 0
   const view = computed(() => deriveWorkspace(document.value))
   const milestones = computed(() => document.value.milestones
     .filter(milestone => milestone.deletedAt === null)
@@ -85,6 +87,33 @@ export function createWorkspaceModel(
     await mutationTail
     const latest = await requireGateway().loadWorkspace({ includeDeleted: true })
     return structuredClone(workspaceDocumentSchema.parse(latest))
+  }
+
+  async function runUpdateMaintenance(install: () => Promise<void>) {
+    if (updateLocked.value) throw new WorkspaceError('unavailable', '更新正在进行，请等待完成后再操作。')
+    // Lock synchronously, before yielding: a click in this turn cannot enqueue a new write.
+    updateLocked.value = true
+    const failuresBeforeWait = mutationFailureCount
+    try {
+      await mutationTail
+      if (mutationFailureCount !== failuresBeforeWait) {
+        throw new WorkspaceError('unavailable', '更新已停止：部分更改保存失败，请重新保存后再试。')
+      }
+      try {
+        const source = requireGateway()
+        if (!source.createUpdateBackup) throw new Error('当前数据源不支持更新备份')
+        await source.createUpdateBackup()
+      }
+      catch {
+        throw new WorkspaceError('unavailable', '更新前恢复备份失败，尚未安装更新。请检查本机存储后重试。')
+      }
+      await install()
+      // A successful installer may close the process later. Keep all writes blocked until exit.
+    }
+    catch (cause) {
+      updateLocked.value = false
+      throw cause
+    }
   }
 
   async function replaceWorkspaceDocument(
@@ -208,8 +237,9 @@ export function createWorkspaceModel(
   }
 
   function enqueueMutation<Result>(operation: () => Promise<Result>): Promise<Result> {
+    if (updateLocked.value) return Promise.reject(new WorkspaceError('unavailable', '更新正在进行，暂时不能保存或修改工作区。'))
     const run = mutationTail.then(operation, operation)
-    mutationTail = run.then(() => undefined, () => undefined)
+    mutationTail = run.then(() => undefined, () => { mutationFailureCount += 1 })
     return run
   }
 
@@ -494,6 +524,7 @@ export function createWorkspaceModel(
     document,
     loading,
     saving,
+    updateLocked: computed(() => updateLocked.value),
     ready,
     recoveryRequired,
     error,
@@ -521,6 +552,7 @@ export function createWorkspaceModel(
     metrics: computed(() => view.value.metrics),
     load,
     readLatestDocument,
+    runUpdateMaintenance,
     recoverWorkspaceDocument,
     importWorkspaceBackup,
     hasAppliedPlan,

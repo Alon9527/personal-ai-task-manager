@@ -1,8 +1,8 @@
-import { getTaskImportance, getTaskStatus, isTaskActive } from '#shared/workspace'
+import { getTaskImportance, getTaskStatus, isTaskActive, isTaskCompleted } from '#shared/workspace'
 import type { QuarterKey, Task } from '#shared/workspace'
 
 export type TodaySort = 'manual' | 'due' | 'priority' | 'title'
-export type TodayStatusFilter = 'all' | 'active' | 'completed'
+export type TodayStatusFilter = 'all' | 'active' | 'completed' | 'cancelled'
 export type TodayPriorityFilter = 'all' | NonNullable<Task['priority']> | 'none'
 
 export type TodayFilters = {
@@ -30,7 +30,7 @@ export function deriveTodayLanes(tasks: Task[], now = new Date()): TodayLanes {
   const today = getTodayDateInput(now)
   const active = tasks.filter(isTaskActive)
   const completedTasks = tasks
-    .filter(task => task.deletedAt === null && !isTaskActive(task))
+    .filter(isTaskCompleted)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   const ranked = [...active].sort((left, right) => {
     const status = Number(getTaskStatus(left) !== 'in_progress') - Number(getTaskStatus(right) !== 'in_progress')
@@ -59,13 +59,14 @@ export function filterAndSortTasks(tasks: Task[], filters: TodayFilters, sort: T
     if (filters.projectId && task.projectId !== filters.projectId) return false
     if (filters.priority === 'none' && task.priority !== null) return false
     if (filters.priority !== 'all' && filters.priority !== 'none' && task.priority !== filters.priority) return false
-    if (filters.status === 'active' && task.completedAt !== null) return false
-    if (filters.status === 'completed' && task.completedAt === null) return false
+    if (filters.status === 'active' && !isTaskActive(task)) return false
+    if (filters.status === 'completed' && !isTaskCompleted(task)) return false
+    if (filters.status === 'cancelled' && getTaskStatus(task) !== 'cancelled') return false
     if (query && !`${task.title} ${task.description}`.toLocaleLowerCase('zh-CN').includes(query)) return false
     return true
   })
 
-  if (sort === 'manual') return [...result]
+  if (sort === 'manual') return result.sort((left, right) => left.sortOrder - right.sortOrder)
   return [...result].sort((left, right) => {
     if (sort === 'title') return left.title.localeCompare(right.title, 'zh-CN')
     if (sort === 'priority') {

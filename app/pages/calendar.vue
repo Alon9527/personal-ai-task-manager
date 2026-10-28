@@ -1,31 +1,38 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { calendarEvents, dateKey, weekDays } from '../utils/calendar-view'
 import type { Task } from '#shared/workspace'
 import type { CreateTaskInput } from '../data/workspace-gateway'
 import TaskEditorDialog from '../components/workspace/TaskEditorDialog.vue'
 import SuiteHeader from '../components/suite/SuiteHeader.vue'
 import SuiteTaskRow from '../components/suite/SuiteTaskRow.vue'
+import { useLocalClock } from '../composables/useLocalClock'
 const workspace = useWorkspace(); const ui = useWorkspaceUi(); const route = useRoute()
 const anchor = ref(new Date()); const view = ref('calendar'); const selectedId = ref<string|null>(null)
 const creating = ref(false); const defaultDate = ref(''); const defaultTime = ref(''); const error = ref(''); const busy = ref(false)
 const scroll = ref<HTMLElement|null>(null)
-const days = computed(() => weekDays(anchor.value)); const today = dateKey(new Date())
+const { now, today, refresh: refreshClock } = useLocalClock()
+const days = computed(() => weekDays(anchor.value))
 const selected = computed(() => workspace.tasks.value.find(t => t.id === selectedId.value) ?? null)
+const embeddedEditorId = crypto.randomUUID()
+// Inline editors do not open the global task dialog, but still contain drafts that an update must not discard.
+watch(() => Boolean(selected.value || creating.value), active => ui.setEmbeddedEditorActive(embeddedEditorId, active), { immediate: true, flush: 'sync' })
+onUnmounted(() => ui.setEmbeddedEditorActive(embeddedEditorId, false))
 const tasks = computed(() => workspace.tasks.value.filter(t => {
   if (route.query.filter === 'done') return t.status === 'done'
   if (t.status === 'cancelled' || t.status === 'done') return false
-  if (route.query.filter === 'today') return t.dueDate === today
-  if (route.query.filter === 'week') return !!t.dueDate && t.dueDate >= today && t.dueDate <= dateKey(new Date(Date.now() + 6*86400000))
+  if (route.query.filter === 'today') return t.dueDate === today.value
+  if (route.query.filter === 'week') return !!t.dueDate && t.dueDate >= today.value && t.dueDate <= dateKey(new Date(now.value.getTime() + 6*86400000))
   return true
 }))
 const columns = [{id:'todo',label:'待办'},{id:'in_progress',label:'进行中'},{id:'waiting',label:'等待中'},{id:'done',label:'已完成'}]
 onMounted(async () => { if (!workspace.ready.value) { try { await workspace.load() } catch { return } } await nextTick(); if (scroll.value) scroll.value.scrollTop = 8*64 })
 function shift(n: number) { const d = new Date(anchor.value); d.setDate(d.getDate()+n*7); anchor.value=d }
-function choose(task: Task) { creating.value=false; selectedId.value=task.id; error.value='' }
-function create(day = today, hour = '09:00') { defaultDate.value=day; defaultTime.value=hour; selectedId.value=null; creating.value=true; error.value='' }
+function choose(task: Task) { if(busy.value || workspace.updateLocked?.value)return; creating.value=false; selectedId.value=task.id; error.value='' }
+function create(day?: string, hour = '09:00') { if(busy.value || workspace.updateLocked?.value)return; refreshClock(); defaultDate.value=day??today.value; defaultTime.value=hour; selectedId.value=null; creating.value=true; error.value='' }
 async function save(input: CreateTaskInput) {
   if (busy.value) return; busy.value=true; error.value=''
+  if (workspace.updateLocked?.value) { error.value='正在准备更新，请等待更新完成后再保存。'; busy.value=false; return }
   try { if (selected.value) await workspace.updateTask(selected.value.id,input); else await workspace.createTask(input); creating.value=false; selectedId.value=null }
   catch (e) { error.value=e instanceof Error?e.message:'保存失败，请重试' } finally { busy.value=false }
 }
@@ -43,5 +50,5 @@ function color(task: Task) { return workspace.projects.value.find(p=>p.id===task
 </div></div></div></div><p class="suite-hint">双击空白时段添加任务；未安排日期的任务请在列表中查看。</p></section>
 <section v-else-if="view==='list'" class="suite-list"><SuiteTaskRow v-for="task in tasks" :key="task.id" :task="task" /><p v-if="!tasks.length" class="suite-empty">暂无符合条件的任务</p></section>
 <section v-else class="suite-kanban"><div v-for="column in columns" :key="column.id" :class="column.id"><header>{{ column.label }}</header><button v-for="task in workspace.tasks.value.filter(t=>column.id==='todo'?['todo','inbox'].includes(t.status):t.status===column.id)" :key="task.id" @click="choose(task)"><strong>{{ task.title }}</strong><small>{{ task.dueDate ?? '未安排日期' }}</small></button></div></section>
-<aside v-if="selected || creating" class="suite-task-detail"><p v-if="error" role="alert">{{ error }}</p><TaskEditorDialog :key="selected?.id ?? `${defaultDate}-${defaultTime}`" :open="true" embedded :task="selected" :projects="workspace.projects.value" :milestones="workspace.milestones.value" :default-date="defaultDate" :default-time="defaultTime" :attachments-enabled="workspace.backendMode.value!=='supabase'" @save="save" @delete="ui.askDeleteTask" @close="selectedId=null;creating=false" /><p v-if="busy">正在保存…</p></aside>
+<aside v-if="selected || creating" class="suite-task-detail"><p v-if="error" role="alert">{{ error }}</p><TaskEditorDialog :key="selected?.id ?? `${defaultDate}-${defaultTime}`" :open="true" embedded :task="selected" :saving="busy || workspace.updateLocked?.value" :projects="workspace.projects.value" :milestones="workspace.milestones.value" :default-date="defaultDate" :default-time="defaultTime" :attachments-enabled="workspace.backendMode.value!=='supabase'" @save="save" @delete="ui.askDeleteTask" @close="selectedId=null;creating=false" /><p v-if="busy">正在保存…</p></aside>
 </div></div></main></template>

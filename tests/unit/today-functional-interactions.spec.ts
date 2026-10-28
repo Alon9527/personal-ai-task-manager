@@ -11,7 +11,7 @@ describe('Today functional interactions', () => {
 
   it('filters real tasks and switches to a working agenda view', async () => {
     const wrapper = await mountSuspended(TodayPage)
-    await vi.waitFor(() => expect(wrapper.findAll('[data-task-row]')).toHaveLength(7))
+    await vi.waitFor(() => expect(wrapper.findAll('[data-task-row]')).toHaveLength(5))
 
     await wrapper.get('[aria-label="筛选任务"]').trigger('click')
     await wrapper.get('[data-today-search]').setValue('MiniMax')
@@ -30,7 +30,7 @@ describe('Today functional interactions', () => {
     await wrapper.get('[aria-label="收起今日重点"]').trigger('click')
 
     await vi.waitFor(() => {
-      const saved = JSON.parse(localStorage.getItem('personal-ai-today-groups:v1') ?? '{}')
+      const saved = JSON.parse(localStorage.getItem('personal-ai-today-groups:v2') ?? '{}')
       expect(saved.next).toBe(true)
     })
   })

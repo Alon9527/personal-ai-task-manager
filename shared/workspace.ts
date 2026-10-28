@@ -172,6 +172,11 @@ export function isTaskActive(task: Pick<Task, 'status' | 'completedAt' | 'delete
   return task.deletedAt === null && task.completedAt === null && status !== 'done' && status !== 'cancelled'
 }
 
+export function isTaskCompleted(task: Pick<Task, 'status' | 'completedAt' | 'deletedAt'>) {
+  const status = getTaskStatus(task)
+  return task.deletedAt === null && status !== 'cancelled' && (status === 'done' || task.completedAt !== null)
+}
+
 function upgradeProject(project: z.infer<typeof projectV2Schema>): Project {
   return { ...project, description: '', priority: null, status: 'active', targetDate: null }
 }

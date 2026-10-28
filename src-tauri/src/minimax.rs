@@ -229,6 +229,14 @@ struct ContextTask {
     title: String,
     description: String,
     priority: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    importance: Option<String>,
+    #[serde(default)]
+    start_date: Option<String>,
+    #[serde(default)]
+    estimated_minutes: Option<u16>,
     due_date: Option<String>,
     due_time: Option<String>,
     is_focus: bool,
@@ -1698,6 +1706,10 @@ fn validate_context(context: &WorkspaceContext) -> Result<(), String> {
             || task.title.chars().count() > 160
             || task.description.chars().count() > 1200
             || task.priority.as_deref().is_some_and(|value| !matches!(value, "low" | "medium" | "high"))
+            || task.status.as_deref().is_some_and(|value| !matches!(value, "inbox" | "todo" | "in_progress" | "waiting" | "done" | "cancelled"))
+            || task.importance.as_deref().is_some_and(|value| !matches!(value, "normal" | "important"))
+            || task.start_date.as_deref().is_some_and(|value| !is_date(value))
+            || task.estimated_minutes.is_some_and(|value| !(5..=1440).contains(&value))
             || task.due_date.as_deref().is_some_and(|value| !is_date(value))
             || task.due_time.as_deref().is_some_and(|value| !is_time(value))
             || !is_timestamp(&task.updated_at)
@@ -1912,6 +1924,10 @@ mod tests {
                 title: "连接 MiniMax".to_string(),
                 description: String::new(),
                 priority: Some("high".to_string()),
+                status: None,
+                importance: None,
+                start_date: None,
+                estimated_minutes: None,
                 due_date: Some("2026-08-05".to_string()),
                 due_time: None,
                 is_focus: true,
@@ -2035,6 +2051,10 @@ mod tests {
                 title: "任务".to_string(),
                 description: String::new(),
                 priority: None,
+                status: None,
+                importance: None,
+                start_date: None,
+                estimated_minutes: None,
                 due_date: None,
                 due_time: None,
                 is_focus: false,
@@ -2043,6 +2063,64 @@ mod tests {
             })
             .collect();
         assert!(validate_context(&valid).is_err());
+    }
+
+    #[test]
+    fn context_planning_fields_survive_all_request_contracts_and_prompts() {
+        let mut data = serde_json::to_value(context()).unwrap();
+        data["tasks"][0]["status"] = serde_json::json!("waiting");
+        data["tasks"][0]["importance"] = serde_json::json!("normal");
+        data["tasks"][0]["startDate"] = serde_json::json!("2026-08-04");
+        data["tasks"][0]["estimatedMinutes"] = serde_json::json!(45);
+        let parsed: WorkspaceContext = serde_json::from_value(data.clone()).expect("accept planning fields");
+        assert!(validate_context(&parsed).is_ok());
+        assert_eq!(serde_json::to_value(&parsed).unwrap()["tasks"][0], data["tasks"][0]);
+        for prompt in [
+            brief_user_prompt(&parsed).unwrap(),
+            ask_user_prompt(&parsed, "安排任务").unwrap(),
+            conversation_user_prompt(&parsed, "安排任务", &[], None).unwrap(),
+        ] {
+            for field in [r#""status":"waiting""#, r#""importance":"normal""#, r#""startDate":"2026-08-04""#, r#""estimatedMinutes":45"#] {
+                assert!(prompt.contains(field), "missing {field}");
+            }
+        }
+        assert!(serde_json::from_value::<BriefRequest>(serde_json::json!({"context":data,"model":MINIMAX_MODEL})).is_ok());
+        assert!(serde_json::from_value::<AskRequest>(serde_json::json!({"context":data,"model":MINIMAX_MODEL,"question":"安排任务"})).is_ok());
+        for target in [
+            serde_json::json!({"kind":"minimax","modelId":MINIMAX_MODEL}),
+            serde_json::json!({"kind":"custom","profileId":PROJECT_ID}),
+        ] {
+            assert!(serde_json::from_value::<AiBriefRequest>(serde_json::json!({"context":data,"target":target})).is_ok());
+            assert!(serde_json::from_value::<AiAskRequest>(serde_json::json!({"context":data,"target":target,"question":"安排任务"})).is_ok());
+        }
+    }
+
+    #[test]
+    fn context_planning_fields_keep_legacy_requests_and_reject_invalid_values() {
+        let mut legacy = serde_json::to_value(context()).unwrap();
+        for field in ["status", "importance", "startDate", "estimatedMinutes"] {
+            legacy["tasks"][0].as_object_mut().unwrap().remove(field);
+        }
+        let parsed: WorkspaceContext = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(validate_context(&parsed).is_ok());
+
+        for (field, value) in [
+            ("status", serde_json::json!("unknown")),
+            ("importance", serde_json::json!("urgent")),
+            ("startDate", serde_json::json!("2026-02-30")),
+            ("estimatedMinutes", serde_json::json!(4)),
+            ("estimatedMinutes", serde_json::json!(1441)),
+            ("estimatedMinutes", serde_json::json!(45.5)),
+            ("estimatedMinutes", serde_json::json!("45")),
+        ] {
+            let mut invalid = legacy.clone();
+            invalid["tasks"][0][field] = value;
+            assert!(serde_json::from_value::<WorkspaceContext>(invalid).map(|context| validate_context(&context).is_err()).unwrap_or(true), "accepted invalid {field}");
+        }
+
+        let mut extended = legacy;
+        extended["tasks"][0]["extra"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<WorkspaceContext>(extended).is_err());
     }
     #[test]
     fn accepts_only_reviewed_models() {

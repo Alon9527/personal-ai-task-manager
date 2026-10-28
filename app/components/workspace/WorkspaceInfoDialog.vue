@@ -35,6 +35,7 @@ onMounted(async () => {
 })
 
 async function checkUpdate() {
+  if (workspace.updateLocked.value) return
   checkingUpdate.value = true
   updateError.value = null
   updateResult.value = null
@@ -51,14 +52,19 @@ async function checkUpdate() {
 }
 
 async function installUpdate() {
-  if (!availableUpdate.value || installingUpdate.value) return
+  const update = availableUpdate.value
+  if (!update || installingUpdate.value || workspace.updateLocked.value) return
+  if (ui.hasOpenEditors.value) {
+    updateError.value = '请先保存并关闭正在编辑的窗口，再安装更新。'
+    return
+  }
   installingUpdate.value = true
   updateError.value = null
   updateProgress.value = { downloaded: 0, total: null }
   try {
-    await availableUpdate.value.install(progress => {
+    await workspace.runUpdateMaintenance(() => update.install(progress => {
       updateProgress.value = progress
-    })
+    }))
   }
   catch (cause) {
     updateError.value = cause instanceof Error ? cause.message : String(cause)
@@ -67,6 +73,7 @@ async function installUpdate() {
 }
 
 function createTask() {
+  if (workspace.updateLocked.value) return
   ui.closeWorkspaceInfo()
   ui.openNewTask()
 }
@@ -139,24 +146,24 @@ async function clearWorkspaceData() {
               <div v-if="installingUpdate" class="update-progress"><span :style="{ width: `${updatePercent ?? 12}%` }" /></div>
               <small v-if="installingUpdate">{{ updatePercent === null ? '正在下载安装包…' : `已下载 ${updatePercent}%` }}</small>
             </div>
-            <button v-if="availableUpdate" type="button" class="update-button primary" :disabled="installingUpdate" @click="installUpdate">
+            <button v-if="availableUpdate" type="button" class="update-button primary" :disabled="installingUpdate || workspace.updateLocked.value" @click="installUpdate">
               {{ installingUpdate ? '正在安装…' : `下载并安装 ${availableUpdate.version}` }}
             </button>
-            <button v-else type="button" class="update-button" :disabled="checkingUpdate" @click="checkUpdate">
+            <button v-else type="button" class="update-button" :disabled="checkingUpdate || workspace.updateLocked.value" @click="checkUpdate">
               {{ checkingUpdate ? '检查中…' : '检查更新' }}
             </button>
-            <small class="update-note">从 GitHub 下载更新并验证签名，无需手动下载安装包。请先保存正在编辑的内容；安装时软件会关闭，已保存的任务和配置会保留。</small>
+            <small class="update-note">从 GitHub 下载更新并验证签名。请先保存并关闭编辑窗口；安装前会暂停工作区写入、等待保存完成并创建恢复备份，备份失败不会安装。安装时软件会关闭。</small>
           </section>
           <section class="danger-zone" aria-label="危险操作">
             <div>
               <span><UIcon name="i-lucide-triangle-alert" /></span>
               <div><b>危险操作</b><small>清除测试数据，让工作区回到完全空白状态</small></div>
             </div>
-            <button type="button" data-open-clear-workspace @click="clearDialogOpen = true">清空工作区数据</button>
+            <button type="button" data-open-clear-workspace :disabled="workspace.updateLocked.value" @click="clearDialogOpen = true">清空工作区数据</button>
           </section>
           <div class="dialog-actions">
             <button class="secondary-action" @click="openSearch"><UIcon name="i-lucide-search" />搜索工作区</button>
-            <button class="primary-action" @click="createTask"><UIcon name="i-lucide-plus" />新建任务</button>
+            <button class="primary-action" :disabled="workspace.updateLocked.value" @click="createTask"><UIcon name="i-lucide-plus" />新建任务</button>
           </div>
         </div>
       </section>
@@ -167,7 +174,7 @@ async function clearWorkspaceData() {
       :project-count="workspace.document.value.projects.length"
       :milestone-count="workspace.document.value.milestones.length"
       :quarter-goal-count="workspace.document.value.quarterGoals.length"
-      :saving="workspace.saving.value"
+      :saving="workspace.saving.value || workspace.updateLocked.value"
       @close="clearDialogOpen = false"
       @confirm="clearWorkspaceData"
     />

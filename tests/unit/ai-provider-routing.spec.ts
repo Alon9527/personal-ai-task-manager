@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createDemoWorkspace } from '../../app/data/demo-workspace'
 
 const invoke = vi.fn()
 const isTauri = vi.fn()
@@ -71,6 +72,28 @@ describe('provider-neutral AI routing', () => {
       apiKey: 'must-not-cross-ipc',
     } as never)).rejects.toThrow()
     expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { kind: 'minimax', modelId: 'MiniMax-M3' },
+    { kind: 'custom', profileId: PROFILE_ID },
+  ] as const)('preserves planning fields when sending to the $kind target', async (target) => {
+    invoke.mockResolvedValue({
+      answer: '已整理', actions: [], sources: [], model: 'test-model',
+      generatedAt: context.generatedAt, usage: null,
+    })
+    const { askAi, buildMiniMaxWorkspaceContext } = await import('../../app/services/minimax')
+    const document = createDemoWorkspace()
+    const task = document.tasks[0]!
+    Object.assign(task, { status: 'waiting', importance: 'important', startDate: '2026-08-17', estimatedMinutes: 90 })
+
+    await askAi(buildMiniMaxWorkspaceContext(document, context.generatedAt), '按重要性和时长安排', target)
+
+    const request = invoke.mock.calls[0]![1].request
+    expect(request.target).toEqual(target)
+    expect(request.context.tasks.find((item: { id: string }) => item.id === task.id)).toMatchObject({
+      id: task.id, status: 'waiting', importance: 'important', startDate: '2026-08-17', estimatedMinutes: 90,
+    })
   })
 
   it.each([

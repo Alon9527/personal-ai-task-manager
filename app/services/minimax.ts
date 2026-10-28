@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { z } from 'zod'
-import type { WorkspaceDocument } from '#shared/workspace'
+import { getTaskImportance, getTaskStatus } from '#shared/workspace'
+import type { TaskImportance, TaskStatus, WorkspaceDocument } from '#shared/workspace'
 import type { CreateTaskInput } from '../data/workspace-gateway'
 import { agentPlanDraftSchema } from './agent-plan-schema'
 import type { AgentAction } from './agent-plan-schema'
@@ -49,6 +50,10 @@ export interface MiniMaxContextTask {
   title: string
   description: string
   priority: MiniMaxPriority | null
+  status: TaskStatus
+  importance: TaskImportance
+  startDate: string | null
+  estimatedMinutes: number | null
   dueDate: string | null
   dueTime: string | null
   isFocus: boolean
@@ -179,10 +184,14 @@ export function buildMiniMaxWorkspaceContext(
       title: clip(task.title, 160),
       description: clip(task.description, 1200),
       priority: task.priority,
+      status: getTaskStatus(task),
+      importance: getTaskImportance(task),
+      startDate: task.startDate ?? null,
+      estimatedMinutes: task.estimatedMinutes ?? null,
       dueDate: task.dueDate,
       dueTime: task.dueTime,
       isFocus: task.isFocus,
-      completed: task.completedAt !== null,
+      completed: getTaskStatus(task) === 'done',
       updatedAt: task.updatedAt,
     }))
   const required = new Set(options.goalIds ?? [])

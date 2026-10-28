@@ -118,6 +118,19 @@ export class DesktopWorkspaceGateway implements WorkspaceGateway {
     return await this.bridge.loadLatestBackup()
   }
 
+  async createUpdateBackup() {
+    const backup = this.mutationQueue.then(async () => {
+      if (!this.bridge.backupDocument) throw new Error('当前桌面存储不支持更新备份')
+      // Read the durable source, not the hydrated cache. Never seed or save during preflight.
+      const raw = await (this.bridge.loadRawDocument ?? this.bridge.loadDocument)()
+      if (raw === null) throw new Error('已保存的工作区无法读取，已停止更新备份')
+      const latest = workspaceDocumentSchema.parse(JSON.parse(raw))
+      await this.bridge.backupDocument(JSON.stringify(latest))
+    })
+    this.mutationQueue = backup.then(() => undefined, () => undefined)
+    return backup
+  }
+
   async emptyTrash() {
     await this.persist(() => this.local.emptyTrash())
   }
