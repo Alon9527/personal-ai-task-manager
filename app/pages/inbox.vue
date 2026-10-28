@@ -7,6 +7,7 @@ import DashboardTopbar from '../components/dashboard/DashboardTopbar.vue'
 import EmptyDashboardState from '../components/dashboard/EmptyDashboardState.vue'
 import MetricCard from '../components/dashboard/MetricCard.vue'
 import TaskActionsMenu from '../components/workspace/TaskActionsMenu.vue'
+import TaskBulkEditorDialog from '../components/workspace/TaskBulkEditorDialog.vue'
 import { softDeleteTasks } from '../services/inbox-bulk-delete'
 
 type StatusFilter = 'all' | 'active' | 'completed'
@@ -29,6 +30,15 @@ async function captureTask(){if(!capture.value.trim()||capturing.value)return;ca
 const bulkDeleteOpen = ref(false)
 const bulkDeleting = ref(false)
 const bulkDeleteError = ref('')
+const bulkEditIds = ref<string[] | null>(null)
+function openBulkEdit() {
+  if (!selectedTaskIds.value.length || workspace.updateLocked?.value) return
+  bulkEditIds.value = [...selectedTaskIds.value]
+}
+function organizeTask(taskId: string) {
+  if (selectedTaskIds.value.length > 1 && selectedTaskIdSet.value.has(taskId)) openBulkEdit()
+  else ui.openEditTask(taskId)
+}
 
 const inboxProject = computed(() =>
   workspace.projects.value.find(project => project.name === '收集箱') ?? null,
@@ -252,6 +262,7 @@ async function moveWithinGroup(task: Task, direction: -1 | 1) {
               >
               <span>{{ allFilteredSelected ? '取消全选' : '全选当前' }}</span>
             </label>
+            <button data-bulk-edit type="button" :disabled="!selectedTaskIds.length || workspace.updateLocked?.value" @click="openBulkEdit">统一编辑<span v-if="selectedTaskIds.length">({{ selectedTaskIds.length }})</span></button>
             <button data-bulk-delete type="button" :disabled="selectedTaskIds.length === 0" @click="openBulkDelete">
               <UIcon name="i-lucide-trash-2" />
               删除所选<span v-if="selectedTaskIds.length">({{ selectedTaskIds.length }})</span>
@@ -307,10 +318,9 @@ async function moveWithinGroup(task: Task, direction: -1 | 1) {
               <UIcon v-if="task.completedAt" name="i-lucide-check" />
             </button>
             <div class="inbox-task-main">
-              <button class="suite-inbox-title" @click="ui.openEditTask(task.id)"><strong :class="{ completed: task.completedAt !== null }">{{ task.title }}</strong></button>
-              <span>
-                <i :style="{ background: projectFor(task)?.color ?? '#9297a1' }" />
-                {{ projectFor(task)?.name ?? '无项目' }}
+              <button class="suite-inbox-title" :title="task.title" @click="ui.openEditTask(task.id)"><strong :class="{ completed: task.completedAt !== null }">{{ task.title }}</strong></button>
+              <span v-if="projectFor(task) || task.dueDate" :title="[projectFor(task)?.name, task.dueDate].filter(Boolean).join(' · ')">
+                {{ [projectFor(task)?.name, task.dueDate].filter(Boolean).join(' · ') }}
               </span>
             </div>
             <span class="inbox-priority" :class="task.priority ?? 'none'">{{ priorityLabel(task.priority) }}</span>
@@ -322,9 +332,9 @@ async function moveWithinGroup(task: Task, direction: -1 | 1) {
               type="button"
               data-organize-suggestion
               class="organize-suggestion"
-              @click="ui.openEditTask(task.id)"
+              @click="organizeTask(task.id)"
             >
-              <UIcon name="i-lucide-wand-sparkles" />{{ organizationSuggestion(task) }}
+              <UIcon name="i-lucide-wand-sparkles" />{{ selectedTaskIds.length > 1 && selectedTaskIdSet.has(task.id) ? `统一编辑 ${selectedTaskIds.length} 项` : organizationSuggestion(task) }}
             </button>
             <div class="task-menu-wrap">
               <button
@@ -364,6 +374,7 @@ async function moveWithinGroup(task: Task, direction: -1 | 1) {
       </section>
     </div>
 
+    <TaskBulkEditorDialog v-if="bulkEditIds" :task-ids="bulkEditIds" @close="bulkEditIds=null" @saved="selectedTaskIds=[]" />
     <Teleport to="body">
       <div v-if="bulkDeleteOpen" class="dialog-backdrop" @mousedown.self="closeBulkDelete">
         <section class="workspace-dialog delete-dialog inbox-bulk-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="inbox-bulk-delete-title">
@@ -382,6 +393,20 @@ async function moveWithinGroup(task: Task, direction: -1 | 1) {
 </template>
 
 <style scoped>
+.suite-inbox .inbox-table{gap:5px}
+.suite-inbox .inbox-task-row{min-height:46px;padding:4px 8px;gap:8px;border-radius:7px}
+.suite-inbox .inbox-task-main{min-width:0}
+.suite-inbox .suite-inbox-title strong{font-size:14px;line-height:18px}
+.suite-inbox .inbox-task-main span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:15px;margin-top:0}
+.suite-inbox .task-check{width:22px;height:22px;flex:0 0 22px;font-size:14px}
+.suite-inbox .inbox-priority{display:block;font-size:12px;flex-shrink:0}
+.suite-inbox .inbox-priority.high{color:#df5260}.suite-inbox .inbox-priority.medium{color:#d98b1b}.suite-inbox .inbox-priority.low{color:#4486dd}
+.suite-inbox .inbox-row-select{display:flex;align-items:center;flex:0 0 20px}
+.suite-inbox .organize-suggestion{max-width:112px;white-space:nowrap;padding:4px 7px;flex-shrink:0}
+.suite-inbox .dashboard-heading{margin-bottom:18px}.suite-inbox .suite-capture{margin-bottom:18px;padding:12px}
+.suite-inbox .inbox-bulk-actions{flex-wrap:wrap;gap:6px}
+.suite-inbox [data-bulk-edit]{color:#6756c5;border-color:#ded5fa}
+@media(pointer:coarse){.suite-inbox .inbox-task-row{min-height:48px}.suite-inbox .task-check{width:28px;height:28px;flex-basis:28px}}
 .inbox-bulk-delete-dialog{width:min(100%,420px)}
 .inbox-bulk-delete-error{padding:9px 10px;border-left:3px solid #c34f4f;background:#fff3f3;color:#a33f3f!important}
 </style>

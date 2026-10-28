@@ -28,16 +28,14 @@ async function attachImages(wrapper: Awaited<ReturnType<typeof mountSuspended>>,
  Object.defineProperty(input.element, 'files', { value: files, configurable: true })
  await input.trigger('change'); await flushPromises()
 }
-it.each(['MiniMax-M3.1-Flash', 'MiniMax-M3'])('sends images to %s only after consent and keeps task changes pending', async modelId => {
+it.each(['MiniMax-M3.1-Flash', 'MiniMax-M3'])('sends images to %s only on submit and keeps existing-record changes pending', async modelId => {
  saveAiModelTarget({ kind: 'minimax', modelId })
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises()
  await attachImages(wrapper, [pngFile()])
  expect(wrapper.get('.ai-image-preview img').attributes('src')).toBe(imageData)
- await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
  expect(injected.ask).not.toHaveBeenCalled()
- expect(wrapper.get('[role="alert"]').text()).toContain('允许')
- await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
+ expect(wrapper.find('.ai-image-input input[type="checkbox"]').exists()).toBe(false)
  await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
  expect(injected.ask).toHaveBeenCalledWith(expect.any(Object), expect.any(String), { kind:'minimax', modelId }, [imageData])
  expect(injected.ask.mock.calls[0][1]).toContain('图片')
@@ -51,7 +49,6 @@ it('blocks old MiniMax image requests but still allows text requests', async () 
  saveAiModelTarget({ kind:'minimax', modelId:'MiniMax-M2.7' })
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises(); await attachImages(wrapper, [pngFile()])
- await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
  await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
  expect(injected.ask).not.toHaveBeenCalled()
  expect(wrapper.get('[role="alert"]').text()).toContain('M3.1 Flash')
@@ -62,23 +59,18 @@ it('blocks old MiniMax image requests but still allows text requests', async () 
  wrapper.unmount()
 })
 
-it('revokes image consent when changing models or adding another picture', async () => {
+it('does not submit images when changing models or adding another picture', async () => {
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises(); await attachImages(wrapper, [pngFile()])
- await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
  saveAiModelTarget({kind:'minimax',modelId:'MiniMax-M3.1-Flash'}); await flushPromises()
- await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
  expect(injected.ask).not.toHaveBeenCalled()
- expect((wrapper.get('.ai-image-input input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
- await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
  await attachImages(wrapper, [pngFile('second.png')])
- await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
  expect(injected.ask).not.toHaveBeenCalled()
  expect(wrapper.findAll('.ai-image-preview')).toHaveLength(2)
  wrapper.unmount()
 })
 
-it('accepts a clipboard image without sending it until consent and submit', async () => {
+it('accepts a clipboard image without sending it until submit', async () => {
  const wrapper = await mountSuspended(SuiteAiPanel, { global: { stubs: { VoiceInputButton: true } } })
  await flushPromises()
  const event = new Event('paste', { bubbles: true, cancelable: true })
@@ -104,12 +96,11 @@ it.each([
  wrapper.unmount()
 })
 
-it('keeps consented images and input after a model failure for an explicit retry', async () => {
+it('keeps images and input after a model failure for an explicit retry', async () => {
  injected.ask.mockRejectedValue(new Error('合成网络错误'))
  const wrapper=await mountSuspended(SuiteAiPanel,{global:{stubs:{VoiceInputButton:true}}})
  await flushPromises(); await attachImages(wrapper,[pngFile()])
  await wrapper.get('[aria-label="AI 计划要求"]').setValue('分析图中任务')
- await wrapper.get('.ai-image-input input[type="checkbox"]').setValue(true)
  await wrapper.get('form.suite-ai-input').trigger('submit'); await flushPromises()
  expect(wrapper.get('[role="alert"]').text()).toContain('合成网络错误')
  expect(wrapper.get('.ai-image-preview img').attributes('src')).toBe(imageData)

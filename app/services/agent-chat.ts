@@ -7,6 +7,7 @@ import type { AiModelTarget } from './ai-model-target'
 import type { ConversationRequest } from './agent-conversation'
 import type { AgentPlanDraftV1 } from './agent-plan-schema'
 import { actionLabel } from './agent-action-display'
+import { canAutoCreateTasks, isTaskCaptureRequest } from './task-capture-intent'
 
 type Ask = ReturnType<typeof createAiGeneration>['ask']
 type Send = Parameters<Ask>[0]
@@ -21,7 +22,7 @@ type Dependencies = {
   connectionGuard?: (key: string) => ConversationRequest['connectionGuard']
 }
 
-/** Shared conversation coordinator. Only explicit, bound confirmation can write data. */
+/** Explicit capture can create tasks; all other writes require bound review confirmation. */
 export function createAgentChat({ log, plan, readDocument, ask, brief, fingerprint, invalidate, connectionGuard }: Dependencies) {
   const busy = ref(false), error = ref('')
   const consent = ref<string | null>(null)
@@ -32,6 +33,7 @@ export function createAgentChat({ log, plan, readDocument, ask, brief, fingerpri
   let epoch = 0
   let activeTurn: string | undefined
   let confirming = false
+  let captureExecutionId: string | null = null
   function planLabels(draft: AgentPlanDraftV1, document: WorkspaceDocument) {
     return draft.actions.map(a => actionLabel(a, document))
   }
@@ -39,7 +41,8 @@ export function createAgentChat({ log, plan, readDocument, ask, brief, fingerpri
     before() { log.load(); log.assertRoom() },
     after(draft, before, results) {
       try {
-        log.receipt(draft.id, `已执行 ${results.length} 项操作。\n${planLabels({...draft,actions:draft.actions.filter(a=>a.selected)}, before).join('\n')}`)
+        const captured = draft.id === captureExecutionId
+        log.receipt(draft.id, `${captured ? `已创建 ${results.length} 项任务。` : `已执行 ${results.length} 项操作。`}\n${planLabels({...draft,actions:draft.actions.filter(a=>a.selected)}, before).join('\n')}${captured ? '\n已保存。请一次检查以上任务，项目、日期等可以稍后补充；如需调整请告诉我。' : ''}`)
         log.displayedRevision.value = null
       } catch { log.error.value = '操作已执行，但执行记录暂未保存；请以任务或目标中的实际结果为准，不要重复提交。' }
     },
@@ -117,7 +120,9 @@ export function createAgentChat({ log, plan, readDocument, ask, brief, fingerpri
       const proposal = outcome.value
       const document = proposal.draft ? proposal.sourceDocument ?? await readDocument() : null
       if (token !== epoch || session !== log.state.value.id) return false
-      log.finishTurn(turn, proposal.response.answer, { model: proposal.response.model, sourceCount: proposal.response.sources?.length ?? 0, tokens: proposal.response.usage?.totalTokens,
+      const answer = !proposal.error && input.images?.length && isTaskCaptureRequest(input.question) && !proposal.response.actions.length
+        ? `未识别到可新建的任务。${proposal.response.answer}` : proposal.response.answer
+      log.finishTurn(turn, answer, { model: proposal.response.model, sourceCount: proposal.response.sources?.length ?? 0, tokens: proposal.response.usage?.totalTokens,
         ...(proposal.draft && document ? {plan:proposal.draft,planLabels:planLabels(proposal.draft,document)} : {}),
       })
       turn = undefined
@@ -130,6 +135,20 @@ export function createAgentChat({ log, plan, readDocument, ask, brief, fingerpri
           catch (cause) { log.propose(proposal.draft, 'null'); throw cause }
           log.associate(plan.draft.value!)
           readyToDisplay.value = planContentRevision(plan.draft.value!)
+          if (!log.state.value.candidate && document && canAutoCreateTasks(input.question, proposal.draft, document)) {
+            // The current create request, not a model sentence or historical "OK", authorizes this exact plan.
+            captureExecutionId = plan.draft.value!.id
+            confirming = true
+            try {
+              const result = await plan.requestExecution(planContentRevision(plan.draft.value!))
+              if (!['executed', 'already-applied', 'applied-cleanup-failed'].includes(result.status)) {
+                error.value = plan.error.value || '任务未保存，请检查计划后重试。'
+                log.append('system', error.value)
+                return false
+              }
+              readyToDisplay.value = null
+            } finally { captureExecutionId = null; confirming = false }
+          }
         }
       }
       return true

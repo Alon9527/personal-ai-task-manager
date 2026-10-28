@@ -22,6 +22,69 @@ function setup() {
 }
 const target = { kind: 'minimax' as const, modelId: 'MiniMax-M3' as const }
 describe('shared Agent chat', () => {
+  function createTaskReply(s: ReturnType<typeof setup>) {
+    s.draft.actions = [{ actionId: 'capture', type: 'createTask', draftRef: 'task:capture', reason: '记录待办', selected: true, dangerous: false, payload: { title: '9666GMS AI视频', description: '', projectId: null, milestoneId: null, priority: null, dueDate: null, dueTime: null, isFocus: false } }]
+    return s
+  }
+  it.each(['帮我记一下今天要做9666GMS的AI视频', '帮我记下分析竞品视频', '帮我记录明天开会讨论视频方案'])('persists an explicit capture immediately and confirms only the resulting summary once: %s', async question => {
+    const s = createTaskReply(setup())
+    expect(await s.chat.send({ question, target })).toBe(true)
+    expect(s.document.value.tasks).toHaveLength(1)
+    expect(s.document.value.tasks[0]?.title).toBe('9666GMS AI视频')
+    expect(s.log.messages.value.at(-1)?.text).toContain('已创建 1 项任务')
+    await s.chat.send({ question: '确定', target })
+    expect(s.document.value.tasks).toHaveLength(1)
+    expect(s.ask).toHaveBeenCalledTimes(1)
+  })
+  it.each([
+    '分析一下要不要新建任务', '不要新建任务', '如果要新建任务会怎样？',
+    '帮我创建一个准备视频的任务，先给我预览，确认后再保存',
+    '新增任务的流程是什么', '记录一下你建议怎么修改现有任务',
+    '帮我添加一个拍摄任务，等我确认再执行', '帮我新建拍摄任务，先给草稿',
+    '新建任务能否自动关联项目', '帮我记录任务，暂不保存',
+  ])('never auto-writes a discussion or reserved confirmation: %s', async question => {
+    const s = createTaskReply(setup()); await s.chat.send({ question, target })
+    expect(s.document.value.tasks).toHaveLength(0)
+    expect(s.replace).not.toHaveBeenCalled()
+  })
+  it('still captures image-only new tasks while reserving existing-record changes for confirmation', async () => {
+    const s = createTaskReply(setup())
+    await s.chat.send({ question: '请把这些图片中能清楚识别的待办记录为新任务，不编造信息；没有任务就说明未识别到任务。已完成或匹配现有任务的内容只提出修改建议，等我确认。', target, images: ['data:image/png;base64,aA=='] })
+    expect(s.document.value.tasks).toHaveLength(1)
+    expect(s.replace).toHaveBeenCalledTimes(1)
+  })
+  it('does not auto-apply existing-record changes even when a request starts with create', async () => {
+    const s = setup(); await s.chat.send({ question: '新建一个任务并改季度目标', target })
+    expect(s.replace).not.toHaveBeenCalled()
+  })
+  it('keeps old pending plans for review instead of executing a new capture alongside them', async () => {
+    const s = setup(); s.plan.setDraft(s.draft)
+    createTaskReply(s)
+    await s.chat.send({ question: '帮我记下新任务', target })
+    expect(s.replace).not.toHaveBeenCalled()
+    expect(s.log.state.value.candidate).not.toBeNull()
+  })
+  it('does not silently repeat a task already captured', async () => {
+    const s = createTaskReply(setup())
+    await s.chat.send({ question: '帮我记一下9666GMS的AI视频', target })
+    await s.chat.send({ question: '帮我记一下9666GMS的AI视频', target })
+    expect(s.document.value.tasks).toHaveLength(1)
+    expect(s.replace).toHaveBeenCalledTimes(1)
+  })
+  it('keeps a failed capture retryable and does not claim it was saved', async () => {
+    const s = createTaskReply(setup()); s.replace.mockRejectedValueOnce(new Error('磁盘写入失败'))
+    expect(await s.chat.send({ question: '帮我记下新任务', target })).toBe(false)
+    expect(s.document.value.tasks).toHaveLength(0)
+    expect(s.log.messages.value.at(-1)?.text).not.toContain('已保存')
+    expect(s.chat.error.value).toBeTruthy()
+  })
+  it('reports no recognized image tasks without inventing a plan', async () => {
+    const s = setup()
+    s.ask.mockResolvedValueOnce({ status: 'ready', isCurrent: () => true, value: { response: { answer: '图片是风景。', actions: [], sources: [], model: 'test', generatedAt: stamp, usage: null }, draft: null, error: null } } as any)
+    await s.chat.send({ question: '请把这些图片中可识别的待办记录为新任务', target, images: ['data:image/png;base64,aA=='] })
+    expect(s.log.messages.value.at(-1)?.text).toContain('未识别到可新建的任务')
+    expect(s.replace).not.toHaveBeenCalled()
+  })
   it.each(['brief','message'])('ignores obsolete fingerprint failures after a successful %s retry',async mode=>{
     const s=setup();let reject!: (cause:Error)=>void
     s.fingerprint.mockResolvedValueOnce(JSON.stringify(target)).mockImplementationOnce(()=>new Promise((_,r)=>{reject=r}))

@@ -14,6 +14,7 @@ import type { TaskAttachment } from '#shared/workspace'
 import { useAgentConversation } from '../../composables/useAgentConversation'
 import AgentConversation from '../agent/AgentConversation.vue'
 import GoalContextPicker from '../agent/GoalContextPicker.vue'
+import { IMAGE_TASK_CAPTURE_REQUEST } from '../../services/task-capture-intent'
 
 const props = defineProps<{ contextMode?: boolean }>()
 const route=useRoute(), plan=useAgentPlan(), ui=useWorkspaceUi(), chat=useAgentConversation()
@@ -25,7 +26,7 @@ const promptInput=ref<HTMLInputElement|null>(null)
 const target=ref<AiModelTarget>(DEFAULT_AI_MODEL_TARGET), providers=ref<ModelProviderProfile[]>([])
 const status=ref<MiniMaxStatus|null>(null)
 const images=ref<TaskAttachment[]>([]), imageInput=ref<HTMLInputElement|null>(null)
-const imageBusy=ref(false), allowImages=ref(false)
+const imageBusy=ref(false)
 const pending=computed(()=>chat.pending.value)
 const ready=computed(()=>!loading.value && (target.value.kind==='custom'
   ? customTargetInfo(target.value.profileId,providers.value).ready
@@ -36,7 +37,7 @@ const unavailable=computed(()=>target.value.kind==='custom'
   : !status.value.configured ? '尚未配置模型，请前往设置。'
   : '请在设置中确认 API Key 对应的服务区域。')
 let requestGeneration=0, refreshGeneration=0, disposed=false, connectionSnapshot=''
-function invalidate(){requestGeneration++;chat.cancel();allowImages.value=false;error.value=''}
+function invalidate(){requestGeneration++;chat.cancel();error.value=''}
 async function refresh(){
   const revision=++refreshGeneration
   try {
@@ -78,7 +79,7 @@ async function addImages(files:File[]){
   if(files.some(f=>!['image/png','image/jpeg','image/webp'].includes(f.type))){error.value='图片分析支持 PNG、JPEG、WebP';return}
   if(images.value.length+files.length>4 || images.value.reduce((n,f)=>n+f.size,0)+files.reduce((n,f)=>n+f.size,0)>8*1024*1024){error.value='一次最多 4 张图片，总大小不超过 8 MB';return}
   imageBusy.value=true;const generation=requestGeneration
-  try{const result=await addTaskAttachments(images.value,files);if(generation===requestGeneration){images.value=result;allowImages.value=false}}
+  try{const result=await addTaskAttachments(images.value,files);if(generation===requestGeneration){images.value=result}}
   catch(cause){error.value=cause instanceof Error?cause.message:'图片添加失败'}
   finally{imageBusy.value=false}
 }
@@ -90,13 +91,12 @@ async function generate(mode:'plan'|'message'='plan'){
   if(!ready.value){error.value=unavailable.value;return}
   if(mode==='message'&&!prompt.value.trim()&&!images.value.length)return
   if(mode==='plan'&&pending.value){error.value='请先审阅现有计划；也可以在下方继续提问，原计划不会被覆盖。';return}
-  if(images.value.length&&!allowImages.value){error.value='请先确认允许把这些图片发送给所选模型。';return}
   if(images.value.length&&target.value.kind==='minimax'&&!supportsMiniMaxImages(target.value.modelId)){error.value='当前 MiniMax 模型不支持图片分析，请在设置中切换 M3.1 Flash、M3 或支持视觉的 OpenAI 兼容模型。';return}
-  const question=prompt.value.trim() || (images.value.length?'请分析这些图片中的待办或已完成事项，提出新增任务或更新已有任务的建议；无法明确匹配时先询问。等我确认后再修改任务。':inbox.value?'请将这些收集箱记录整理成可执行任务，建议重要性、项目归属和日期。请更新已有任务，不重复创建。':'请为今天提出可执行的日程安排，考虑任务重要性、截止日期和预计时长。不要直接执行。')
+  const question=prompt.value.trim() || (images.value.length?IMAGE_TASK_CAPTURE_REQUEST:inbox.value?'请将这些收集箱记录整理成可执行任务，建议重要性、项目归属和日期。请更新已有任务，不重复创建。':'请为今天提出可执行的日程安排，考虑任务重要性、截止日期和预计时长。不要直接执行。')
   if(mode==='plan'&&inbox.value&&!selectedIds.value.length&&!images.value.length){error.value='请先选择要整理的记录，或添加图片。';return}
   const submitted=prompt.value
   const sent=await chat.send({question,target:target.value,images:images.value.map(i=>i.dataUrl),taskIds:inbox.value&&selectedIds.value.length&&!images.value.length?[...selectedIds.value]:undefined})
-  if(sent){if(prompt.value===submitted)prompt.value='';images.value=[];allowImages.value=false}
+  if(sent){if(prompt.value===submitted)prompt.value='';images.value=[]}
 }
 async function generateBrief(){error.value='';if(ready.value&&!imageBusy.value)await chat.generateBrief(target.value)}
 </script>
@@ -120,15 +120,15 @@ async function generateBrief(){error.value='';if(ready.value&&!imageBusy.value)a
           <p v-if="error||chat.error.value" data-ai-composer-error class="suite-error suite-ai-feedback" role="alert">{{error||chat.error.value}}</p>
           <GoalContextPicker />
           <section v-if="images.length" class="ai-image-input">
-            <div class="image-strip"><div v-for="picture in images" :key="picture.id" class="ai-image-preview"><img :src="picture.dataUrl" :alt="picture.name"><button type="button" :disabled="busy||imageBusy" :aria-label="`移除图片 ${picture.name}`" @click="images=images.filter(i=>i.id!==picture.id);allowImages=false">移除</button></div></div>
-            <label><input v-model="allowImages" type="checkbox" :disabled="busy">允许发送这些图片给所选模型，确认后才修改任务。</label>
+            <div class="image-strip"><div v-for="picture in images" :key="picture.id" class="ai-image-preview"><img :src="picture.dataUrl" :alt="picture.name"><button type="button" :disabled="busy||imageBusy" :aria-label="`移除图片 ${picture.name}`" @click="images=images.filter(i=>i.id!==picture.id)">移除</button></div></div>
+            <small>点击发送时，当前图片才会交给所选模型。仅发送图片时会记录识别到的新待办。</small>
           </section>
           <form class="suite-ai-input" :class="{'ask-ai':props.contextMode}" :aria-busy="busy" @submit.prevent="generate('message')">
             <input ref="promptInput" v-model="prompt" :disabled="busy" aria-label="AI 计划要求" placeholder="输入问题，或描述要调整的任务…" maxlength="1000">
             <div class="composer-actions"><button type="button" aria-label="添加图片" :disabled="busy||imageBusy" @click="imageInput?.click()"><UIcon name="i-lucide-image" /></button><VoiceInputButton @transcript="text=>prompt=[prompt,text].filter(Boolean).join(' ')" /><button type="submit" aria-label="发送计划要求" :disabled="busy||imageBusy||!ready||(!prompt.trim()&&!images.length)"><UIcon name="i-lucide-arrow-up" /></button></div>
           </form>
           <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden @change="selectImages">
-          <small class="composer-privacy">点击发送才调用模型 · 确认后才修改任务或目标</small>
+          <small class="composer-privacy">明确新增直接保存 · 修改或删除现有记录需确认</small>
         </div>
       </template>
     </AgentConversation>

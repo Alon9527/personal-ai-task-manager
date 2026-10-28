@@ -265,6 +265,7 @@ function toLocalDateTimeInput(value: string | null) {
           <div>
             <small>TASK</small>
             <h2 id="task-editor-title">{{ task ? '编辑任务' : '新建任务' }}</h2>
+            <label class="task-header-focus"><input v-model="form.isFocus" name="isFocus" :form="formId" type="checkbox" :disabled="saving">今日重点</label>
           </div>
           <div class="task-header-actions">
             <button v-if="task" type="button" class="task-delete-action" data-delete-task :disabled="saving" @click="!saving && emit('delete', task.id)">删除任务</button>
@@ -283,7 +284,7 @@ function toLocalDateTimeInput(value: string | null) {
           <label class="form-field"><span>提醒</span><input v-model="form.reminderLocal" name="reminderAt" type="datetime-local"></label>
           <label class="form-field"><span>任务描述</span><textarea v-model="form.description" name="description" rows="2" placeholder="讨论背景、结果或下一步" /></label>
           <section class="suite-compact-attachments"><span>附件</span><button type="button" :disabled="!attachmentsEnabled||attachmentBusy" @click="chooseAttachmentFiles"><UIcon name="i-lucide-paperclip" />添加文件 / 图片</button><input ref="attachmentInput" type="file" multiple hidden @change="handleAttachmentFiles"><div v-for="attachment in form.attachments" :key="attachment.id"><button type="button" @click="downloadAttachment(attachment)">{{attachment.name}}</button><button type="button" :aria-label="`移除 ${attachment.name}`" @click="removeAttachment(attachment.id)">×</button></div><small v-if="attachmentError" role="alert">{{attachmentError}}</small></section>
-          <details class="suite-editor-more"><summary>项目、里程碑与更多选项</summary><label class="form-field"><span>项目</span><select v-model="form.projectId"><option value="">无项目</option><option v-for="p in projects" :key="p.id" :value="p.id">{{p.name}}</option></select></label><label class="form-field"><span>里程碑</span><select v-model="form.milestoneId"><option value="">无里程碑</option><option v-for="m in filteredMilestones" :key="m.id" :value="m.id">{{m.title}}</option></select></label><label class="form-field"><span>优先级</span><select v-model="form.priority"><option value="">未设置</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label><label><input v-model="form.isFocus" type="checkbox">今日重点</label></details>
+          <details class="suite-editor-more"><summary>项目、里程碑与更多选项</summary><label class="form-field"><span>项目</span><select v-model="form.projectId"><option value="">无项目</option><option v-for="p in projects" :key="p.id" :value="p.id">{{p.name}}</option></select></label><label class="form-field"><span>里程碑</span><select v-model="form.milestoneId"><option value="">无里程碑</option><option v-for="m in filteredMilestones" :key="m.id" :value="m.id">{{m.title}}</option></select></label><label class="form-field"><span>优先级</span><select v-model="form.priority"><option value="">未设置</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label></details>
           <p v-if="validationError" role="alert" class="inline-error">{{validationError}}</p>
         </form>
         <form :id="formId" v-else :inert="saving || undefined" @submit.prevent="submit">
@@ -370,10 +371,6 @@ function toLocalDateTimeInput(value: string | null) {
             <span>提醒时间</span>
             <input v-model="form.reminderLocal" name="reminderAt" type="datetime-local">
           </label>
-          <label class="focus-toggle form-field-wide">
-            <input v-model="form.isFocus" name="isFocus" type="checkbox">
-            <span><b>今日重点</b><small>放在优先完成分组</small></span>
-          </label>
           <p v-if="validationError" role="alert" class="inline-error">{{ validationError }}</p>
 
         </form>
@@ -396,8 +393,12 @@ function toLocalDateTimeInput(value: string | null) {
 @media(max-width:600px){.task-editor>.dialog-header{display:grid;grid-template-columns:minmax(0,1fr) 30px;gap:12px}.task-header-actions{grid-row:2;grid-column:1/-1;width:100%;margin:0}.task-header-actions button{flex:1;padding:9px 8px}.task-editor>.dialog-header>button{grid-row:1;grid-column:2}}
 .task-editor .task-status-options input[type=radio]{width:1px!important;min-width:1px!important;height:1px!important;padding:0!important;border:0!important}
 .task-editor .task-status-options span [class*=icon]{border:0;padding:0;min-height:0;background:transparent;box-shadow:none}
-.task-editor{max-height:calc(100dvh - 36px)}
-.task-editor>form{max-height:calc(100dvh - 112px);overflow-y:auto}
+.task-editor{max-height:calc(100dvh - 36px);display:flex;flex-direction:column;overflow:hidden}
+.task-editor>.dialog-header{flex-shrink:0}
+.task-editor>form{min-height:0;overflow-y:auto}
+.task-header-focus{display:flex;align-items:center;gap:7px;margin-top:8px;font-size:13px;font-weight:650;color:#6756c5;white-space:nowrap}
+.task-header-focus input{appearance:auto;width:16px;height:16px;min-height:0;margin:0;padding:0;accent-color:#7750ff}
+.task-header-focus input:focus-visible{outline:2px solid #7750ff;outline-offset:3px}
 .task-status-field{min-width:0;margin:0;padding:0;border:0}
 .task-status-field legend{margin-bottom:7px;color:#656a73;font-size:13px;font-weight:700}
 .task-status-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
@@ -428,5 +429,5 @@ function toLocalDateTimeInput(value: string | null) {
 .task-attachment-remove:hover{background:#fff0f0;color:#b84d4d}
 .task-attachment-empty,.task-attachment-error{margin:0;line-height:1.45}
 .task-attachment-error{color:#b34646;font-size:12px}
-@media(max-width:760px){.task-editor{max-height:calc(100dvh - 16px)}.task-editor>form{max-height:calc(100dvh - 88px)}.task-status-options{grid-template-columns:repeat(2,minmax(0,1fr))}.task-attachment-list{grid-template-columns:1fr}.task-attachment-heading{align-items:flex-start;flex-direction:column}}
+@media(max-width:760px){.task-editor{max-height:calc(100dvh - 16px)}.task-status-options{grid-template-columns:repeat(2,minmax(0,1fr))}.task-attachment-list{grid-template-columns:1fr}.task-attachment-heading{align-items:flex-start;flex-direction:column}}
 </style>

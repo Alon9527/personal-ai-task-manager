@@ -1,5 +1,6 @@
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
+import { defineComponent, h, ref, nextTick } from 'vue'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createWorkspaceModel } from '../../app/models/workspace-model'
 import { LocalWorkspaceGateway, LOCAL_WORKSPACE_STORAGE_KEY } from '../../app/data/local-workspace-gateway'
@@ -31,6 +32,22 @@ async function mountEditor() {
   await wrapper.get('[name=title]').setValue('只能创建一次')
   return wrapper
 }
+
+it.each([false, true])('keeps the focus toggle in the fixed header (embedded=%s)', async embedded => {
+  const saving = ref(false)
+  const Host = defineComponent({ setup: () => () => h(TaskEditorDialog, { open: true, task: null, projects: [], milestones: [], embedded, saving: saving.value }) })
+  const wrapper = await mountSuspended(Host, { global: { stubs: { Teleport: true } } })
+  wrappers.push(wrapper)
+  expect(wrapper.findAll('[name=isFocus]')).toHaveLength(1)
+  const focus = wrapper.get('.dialog-header [name=isFocus]')
+  await focus.setValue(true)
+  await wrapper.get('[name=title]').setValue('置顶测试')
+  await wrapper.get('form').trigger('submit')
+  expect(wrapper.findComponent(TaskEditorDialog).emitted('save')?.[0]?.[0]).toMatchObject({ isFocus: true })
+  saving.value = true; await nextTick()
+  expect(wrapper.findComponent(TaskEditorDialog).props('saving')).toBe(true)
+  expect(wrapper.get('.dialog-header [name=isFocus]').attributes('disabled')).toBeDefined()
+})
 
 it('coalesces two immediate editor submissions into one persisted task', async () => {
   const wrapper = await mountEditor()
