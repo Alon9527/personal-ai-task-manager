@@ -3,8 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import { deriveQuarterMetrics } from '#shared/workspace'
 import ProjectActionsMenu from '../workspace/ProjectActionsMenu.vue'
 import { getCurrentQuarter } from '../../utils/today-view'
+import { desktopUpdateNotice } from '../../services/update-notice'
 
 const workspace = useWorkspace()
+const updateVersion = desktopUpdateNotice.availableVersion
 const ui = useWorkspaceUi()
 const route = useRoute()
 const modelManagerOpen = useState<boolean>('model-manager-open', () => false)
@@ -72,7 +74,10 @@ async function moveProject(projectId: string, direction: -1 | 1) {
       <button type="button" @click="ui.openDataImport"><UIcon name="i-lucide-file-input" />导入资料</button>
       <button type="button" @click="ui.openFeishuLinks"><UIcon name="i-lucide-external-link" />飞书</button>
     </div>
-    <NuxtLink to="/settings" class="sidebar-link suite-settings-entry"><UIcon name="i-lucide-settings" />设置</NuxtLink>
+    <NuxtLink :to="updateVersion ? '/settings?tab=updates' : '/settings'" class="sidebar-link suite-settings-entry">
+      <UIcon name="i-lucide-settings" />设置
+      <span v-if="updateVersion" data-update-dot class="settings-update-dot" role="status" :aria-label="`有新版本 ${updateVersion} 可更新`" :title="`有新版本 ${updateVersion} 可更新`" />
+    </NuxtLink>
     <details class="sidebar-settings suite-legacy-settings">
       <summary><UIcon name="i-lucide-settings" />设置</summary>
       <button type="button" @click="modelManagerOpen = true"><UIcon name="i-lucide-brain-circuit" />AI 模型配置</button>
@@ -89,4 +94,5 @@ async function moveProject(projectId: string, direction: -1 | 1) {
 .sidebar-bridge-actions button:hover{background:rgb(255 255 255 / 8%);color:#fff}
 .sidebar-bridge-actions .iconify{font-size:15px}
 .sidebar-create{margin-top:8px}
+.settings-update-dot{width:8px;height:8px;flex:0 0 8px;margin-left:auto;border-radius:50%;background:#f04f64}
 </style>

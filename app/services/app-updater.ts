@@ -4,7 +4,7 @@ import type { Update } from '@tauri-apps/plugin-updater'
 export type DesktopUpdateCheck =
   | { status: 'unavailable', currentVersion: string, message: string }
   | { status: 'current', currentVersion: string, message: string }
-  | { status: 'available', currentVersion: string, version: string, date: string | null, body: string | null, install: (onProgress: (progress: UpdateProgress) => void) => Promise<void> }
+  | { status: 'available', currentVersion: string, version: string, date: string | null, body: string | null, install: (onProgress: (progress: UpdateProgress) => void) => Promise<void>, dispose?: () => Promise<void> }
 
 export interface UpdateProgress {
   downloaded: number
@@ -51,7 +51,7 @@ export async function checkDesktopUpdate(): Promise<DesktopUpdateCheck> {
   }
   try {
     const { check } = await import('@tauri-apps/plugin-updater')
-    const update = await check()
+    const update = await check({ timeout: 15000 })
     if (!update) return { status: 'current', currentVersion, message: '当前已是最新版本。' }
     return {
       status: 'available',
@@ -60,6 +60,7 @@ export async function checkDesktopUpdate(): Promise<DesktopUpdateCheck> {
       date: update.date ?? null,
       body: update.body ?? null,
       install: onProgress => installDesktopUpdate(update, onProgress),
+      dispose: () => update.close(),
     }
   }
   catch (cause) {

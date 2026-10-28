@@ -12,6 +12,7 @@ const isAgentPlan = computed(() => route.path === '/agent-plan')
 const suiteWide = computed(() => ['/calendar','/project','/settings'].includes(route.path))
 const suiteAi = computed(() => (route.path === '/' && !route.query.project && !route.query.view) || route.path === '/inbox')
 useTaskReminders()
+useUpdateNotifications()
 
 onMounted(() => {
   void uiPreferences.load()

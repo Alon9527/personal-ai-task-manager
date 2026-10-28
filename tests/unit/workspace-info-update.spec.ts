@@ -8,6 +8,7 @@ import { createWorkspaceModel } from '../../app/models/workspace-model'
 import { DesktopWorkspaceGateway } from '../../app/data/desktop-workspace-gateway'
 import { createDemoWorkspace } from '../../app/data/demo-workspace'
 import CalendarPage from '../../app/pages/calendar.vue'
+import { desktopUpdateNotice } from '../../app/services/update-notice'
 
 const mocks = vi.hoisted(() => ({ workspace: null as any, install: vi.fn(), check: vi.fn() }))
 mockNuxtImport('useWorkspace', () => () => mocks.workspace)
@@ -34,6 +35,8 @@ describe('workspace update preflight', () => {
   beforeEach(async () => {
     localStorage.clear()
     vi.clearAllMocks()
+    mocks.check.mockResolvedValue({ status: 'current', currentVersion: '0.3.21', message: '当前已是最新版本。' })
+    await desktopUpdateNotice.check()
     let stored = JSON.stringify(createDemoWorkspace())
     backupDocument = vi.fn(async () => undefined)
     mocks.workspace = createWorkspaceModel(new DesktopWorkspaceGateway(localStorage, {

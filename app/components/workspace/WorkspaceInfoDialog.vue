@@ -2,17 +2,17 @@
 import { computed, onMounted, ref } from 'vue'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { UI_SCALE_OPTIONS } from '../../composables/useUiPreferences'
-import { checkDesktopUpdate, currentAppVersion } from '../../services/app-updater'
-import type { DesktopUpdateCheck } from '../../services/app-updater'
+import { currentAppVersion } from '../../services/app-updater'
+import { desktopUpdateNotice } from '../../services/update-notice'
 import ClearWorkspaceDataDialog from './ClearWorkspaceDataDialog.vue'
 defineProps<{ embedded?: boolean, section?: 'data'|'updates' }>()
 const workspace = useWorkspace()
 const ui = useWorkspaceUi()
 const preferences = useUiPreferences()
 const appVersion = ref('读取中…')
-const updateResult = ref<DesktopUpdateCheck | null>(null)
+const updateResult = desktopUpdateNotice.result
 const updateError = ref<string | null>(null)
-const checkingUpdate = ref(false)
+const checkingUpdate = desktopUpdateNotice.checking
 const installingUpdate = ref(false)
 const updateProgress = ref({ downloaded: 0, total: null as number | null })
 const storageStatus = ref<{ driver: string, databasePath: string, schemaVersion: number } | null>(null)
@@ -36,24 +36,19 @@ onMounted(async () => {
 
 async function checkUpdate() {
   if (workspace.updateLocked.value) return
-  checkingUpdate.value = true
   updateError.value = null
-  updateResult.value = null
   try {
-    updateResult.value = await checkDesktopUpdate()
-    appVersion.value = updateResult.value.currentVersion
+    const result = await desktopUpdateNotice.check()
+    appVersion.value = result.currentVersion
   }
   catch (cause) {
     updateError.value = cause instanceof Error ? cause.message : String(cause)
-  }
-  finally {
-    checkingUpdate.value = false
   }
 }
 
 async function installUpdate() {
   const update = availableUpdate.value
-  if (!update || installingUpdate.value || workspace.updateLocked.value) return
+  if (!update || checkingUpdate.value || installingUpdate.value || workspace.updateLocked.value) return
   if (ui.hasOpenEditors.value) {
     updateError.value = '请先保存并关闭正在编辑的窗口，再安装更新。'
     return
@@ -146,7 +141,7 @@ async function clearWorkspaceData() {
               <div v-if="installingUpdate" class="update-progress"><span :style="{ width: `${updatePercent ?? 12}%` }" /></div>
               <small v-if="installingUpdate">{{ updatePercent === null ? '正在下载安装包…' : `已下载 ${updatePercent}%` }}</small>
             </div>
-            <button v-if="availableUpdate" type="button" class="update-button primary" :disabled="installingUpdate || workspace.updateLocked.value" @click="installUpdate">
+            <button v-if="availableUpdate" type="button" class="update-button primary" :disabled="checkingUpdate || installingUpdate || workspace.updateLocked.value" @click="installUpdate">
               {{ installingUpdate ? '正在安装…' : `下载并安装 ${availableUpdate.version}` }}
             </button>
             <button v-else type="button" class="update-button" :disabled="checkingUpdate || workspace.updateLocked.value" @click="checkUpdate">

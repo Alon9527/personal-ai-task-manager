@@ -35,6 +35,19 @@ describe('desktop updater', () => {
     expect(check).not.toHaveBeenCalled()
   })
 
+  it('bounds update checks and releases a replaced native update without downloading', async () => {
+    const close = vi.fn().mockResolvedValue(undefined)
+    const downloadAndInstall = vi.fn()
+    check.mockResolvedValue({ version: '0.3.22', date: null, body: null, close, downloadAndInstall })
+    const { checkDesktopUpdate } = await import('../../app/services/app-updater')
+    const result = await checkDesktopUpdate()
+    expect(check).toHaveBeenCalledWith({ timeout: 15000 })
+    if (result.status !== 'available') throw new Error('Expected available update')
+    await result.dispose?.()
+    expect(close).toHaveBeenCalledOnce()
+    expect(downloadAndInstall).not.toHaveBeenCalled()
+  })
+
   it('downloads and installs through the signed updater while reporting progress', async () => {
     const downloadAndInstall = vi.fn(async (notify) => {
       notify({ event: 'Started', data: { contentLength: 100 } })
