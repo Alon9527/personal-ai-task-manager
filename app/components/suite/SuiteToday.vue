@@ -14,10 +14,20 @@ const search=ref('');const priority=ref<TodayPriorityFilter>('all');const status
 const showFilters=ref(false);const view=ref<'list'|'agenda'>('list');const quickTask=ref('');const adding=ref(false);const error=ref('')
 const collapsed=ref({next:false,other:false,completed:true})
 const groupStorageKey='personal-ai-today-groups:v2'
-const filtered=computed(()=>filterAndSortTasks(workspace.tasks.value,{query:search.value,priority:priority.value,status:status.value,projectId:null},sort.value))
+const taskFilters=computed(()=>({query:search.value,priority:priority.value,status:status.value,projectId:null}))
+const filtered=computed(()=>filterAndSortTasks(workspace.tasks.value,taskFilters.value,sort.value,workspace.projects.value))
 const filteredView=computed(()=>Boolean(search.value.trim())||priority.value!=='all'||status.value!=='all')
 const active=computed(()=>filtered.value.filter(isTaskActive))
-const focus=computed(()=>[...active.value].filter(t=>t.isFocus||t.importance==='important'||t.status==='in_progress').sort((a,b)=>Number(b.status==='in_progress')-Number(a.status==='in_progress')).slice(0,3))
+const focus=computed(()=>{
+  // Start from the original source so equal sort positions retain manual tie order too.
+  const candidates=sort.value==='project'
+    ? filterAndSortTasks(workspace.tasks.value,taskFilters.value,'manual').filter(isTaskActive)
+    : [...active.value]
+  const selected=candidates.filter(t=>t.isFocus||t.importance==='important'||t.status==='in_progress').sort((a,b)=>Number(b.status==='in_progress')-Number(a.status==='in_progress')).slice(0,3)
+  if(sort.value!=='project')return selected
+  const ids=new Set(selected.map(t=>t.id))
+  return active.value.filter(t=>ids.has(t.id))
+})
 const others=computed(()=>active.value.filter(t=>!focus.value.some(f=>f.id===t.id)))
 const completed=computed(()=>filtered.value.filter(isTaskCompleted))
 const cancelled=computed(()=>filtered.value.filter(t=>getTaskStatus(t)==='cancelled'))
@@ -34,7 +44,7 @@ async function addTask(){if(adding.value||!quickTask.value.trim())return;adding.
 <main class="suite-page suite-today"><SuiteHeader section="Today" /><div class="suite-content">
 <header class="suite-heading"><div><div class="suite-today-title"><h1>Today</h1><time>{{now.toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'})}}</time></div><p>先做好重要的事。 <span data-backend-mode>{{workspace.backendLabel.value}}</span></p></div><button class="suite-primary add-button" @click="ui.openNewTask()"><UIcon name="i-lucide-plus" />新建任务</button></header>
 <section class="suite-metrics"><article><strong>{{focus.length}}</strong><div><b>今日重点</b><small>聚焦关键任务</small></div></article><article><strong>{{reminders}}</strong><div><b>待提醒</b><small>近期将处理</small></div></article><article><strong>{{progress}}%</strong><div><b>项目进度</b><small>{{project?.name??'暂无项目'}}</small></div></article></section>
-<div class="today-controls"><div class="view-tabs suite-segments"><button :class="{active:view==='list'}" @click="view='list'">列表</button><button :class="{active:view==='agenda'}" @click="view='agenda'">日程</button></div><button class="suite-secondary" aria-label="筛选任务" :aria-expanded="showFilters" @click="showFilters=!showFilters">筛选任务</button><select v-model="sort" aria-label="任务排序"><option value="manual">手动排序</option><option value="due">按截止时间</option><option value="priority">按优先级</option><option value="title">按标题</option></select></div>
+<div class="today-controls"><div class="view-tabs suite-segments"><button :class="{active:view==='list'}" @click="view='list'">列表</button><button :class="{active:view==='agenda'}" @click="view='agenda'">日程</button></div><button class="suite-secondary" aria-label="筛选任务" :aria-expanded="showFilters" @click="showFilters=!showFilters">筛选任务</button><select v-model="sort" aria-label="任务排序"><option value="manual">手动排序</option><option value="project">按项目排列</option><option value="due">按截止时间</option><option value="priority">按优先级</option><option value="title">按标题</option></select></div>
 <div v-if="showFilters" class="today-controls"><input v-model="search" data-today-search aria-label="筛选关键词" placeholder="筛选任务标题或描述"><select v-model="priority" data-today-priority aria-label="优先级筛选"><option value="all">全部优先级</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option><option value="none">无</option></select><select v-model="status" data-today-status aria-label="完成状态筛选"><option value="all">全部状态</option><option value="active">未完成</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select><button @click="search='';priority='all';status='all'">重置</button></div>
 <form data-quick-add class="today-quick-add" @submit.prevent="addTask"><input v-model="quickTask" aria-label="快速添加任务" placeholder="记下一件待办，按 Enter 添加" :disabled="adding"><VoiceInputButton @transcript="text=>quickTask=[quickTask,text].filter(Boolean).join(' ')" /><button class="suite-primary" :disabled="adding||!quickTask.trim()">{{adding?'添加中…':'添加任务'}}</button></form><p v-if="error" role="alert">{{error}}</p>
 <template v-if="view==='list'">

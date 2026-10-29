@@ -1,7 +1,7 @@
 import { getTaskImportance, getTaskStatus, isTaskActive, isTaskCompleted } from '#shared/workspace'
-import type { QuarterKey, Task } from '#shared/workspace'
+import type { Project, QuarterKey, Task } from '#shared/workspace'
 
-export type TodaySort = 'manual' | 'due' | 'priority' | 'title'
+export type TodaySort = 'manual' | 'due' | 'priority' | 'title' | 'project'
 export type TodayStatusFilter = 'all' | 'active' | 'completed' | 'cancelled'
 export type TodayPriorityFilter = 'all' | NonNullable<Task['priority']> | 'none'
 
@@ -52,7 +52,7 @@ export function deriveTodayLanes(tasks: Task[], now = new Date()): TodayLanes {
   return { nowTask, nextTasks, laterTodayTasks, backlogTasks, completedTasks }
 }
 
-export function filterAndSortTasks(tasks: Task[], filters: TodayFilters, sort: TodaySort): Task[] {
+export function filterAndSortTasks(tasks: Task[], filters: TodayFilters, sort: TodaySort, projects: readonly Pick<Project, 'id'>[] = []): Task[] {
   const query = filters.query.trim().toLocaleLowerCase('zh-CN')
   const result = tasks.filter((task) => {
     if (task.deletedAt !== null) return false
@@ -67,6 +67,12 @@ export function filterAndSortTasks(tasks: Task[], filters: TodayFilters, sort: T
   })
 
   if (sort === 'manual') return result.sort((left, right) => left.sortOrder - right.sortOrder)
+  if (sort === 'project') {
+    // The workspace supplies sidebar order; IDs keep renamed or same-name projects distinct.
+    const projectRank = new Map(projects.map((project, index) => [project.id, index]))
+    const rank = (task: Task) => task.projectId ? projectRank.get(task.projectId) ?? projects.length : projects.length
+    return result.sort((left, right) => rank(left) - rank(right) || left.sortOrder - right.sortOrder)
+  }
   return [...result].sort((left, right) => {
     if (sort === 'title') return left.title.localeCompare(right.title, 'zh-CN')
     if (sort === 'priority') {

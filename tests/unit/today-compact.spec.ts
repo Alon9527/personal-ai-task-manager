@@ -88,3 +88,86 @@ it('ignores corrupted group preferences and still renders all pending tasks', as
   expect(w.findAll('[data-today-section="other"] [data-task-row]')).toHaveLength(23)
   expect(w.get('[aria-label="展开已完成"]').exists()).toBe(true)
 })
+
+function loadProjectSortFixture() {
+  const document = createDenseToday()
+  const first = document.projects[0]!
+  first.name = '自定义交付项目'
+  first.sortOrder = 1
+  const second = { ...first, id: '10000000-0000-4000-8000-000000000002', sortOrder: 0 }
+  document.projects.push(second)
+  document.tasks[1]!.projectId = second.id
+  document.tasks[4]!.projectId = second.id
+  injected.workspace!.document.value = document
+  return { document, first, second }
+}
+
+it('sorts Today by actual project IDs while retaining all rows, filters and manual order without saving', async () => {
+  const { document } = loadProjectSortFixture()
+  const w = await mountToday()
+  const rowIds = (key = 'other') => w.findAll(`[data-today-section="${key}"] [data-task-row]`).map(row => row.attributes('data-task-id'))
+  const original = rowIds()
+  const persisted = localStorage.getItem('personal-ai-workspace:v1')
+  const before = JSON.stringify(injected.workspace!.document.value)
+  expect(w.find('option[value="project"]').exists()).toBe(true)
+  await w.get('[aria-label="任务排序"]').setValue('project')
+  expect(rowIds()).toHaveLength(23)
+  expect(rowIds().slice(0, 2)).toEqual([document.tasks[1]!.id, document.tasks[4]!.id])
+  expect(rowIds().slice(-7)).toEqual([3, 6, 9, 12, 15, 18, 21].map(i => document.tasks[i]!.id))
+  await w.get('[aria-label="展开已完成"]').trigger('click')
+  expect(rowIds('completed')).toHaveLength(29)
+  await w.get('[aria-label="筛选任务"]').trigger('click')
+  await w.get('[aria-label="筛选关键词"]').setValue('碳棉')
+  expect(rowIds()).toEqual([document.tasks[1]!.id])
+  await w.get('[aria-label="筛选关键词"]').setValue('')
+  await w.get('[aria-label="任务排序"]').setValue('manual')
+  expect(rowIds()).toEqual(original)
+  expect(JSON.stringify(injected.workspace!.document.value)).toBe(before)
+  expect(localStorage.getItem('personal-ai-workspace:v1')).toBe(persisted)
+})
+
+it('responds to project renames, additions and sidebar order changes without built-in project names', async () => {
+  const { document, first, second } = loadProjectSortFixture()
+  const w = await mountToday()
+  expect(w.find('option[value="project"]').exists()).toBe(true)
+  await w.get('[aria-label="任务排序"]').setValue('project')
+  const rows = () => w.findAll('[data-today-section="other"] [data-task-row]')
+  expect(rows()[0]!.attributes('data-task-id')).toBe(document.tasks[1]!.id)
+  injected.workspace!.document.value.projects[1]!.name = '季度客户拍摄'
+  await flushPromises()
+  expect(rows()[0]!.text()).toContain('季度客户拍摄')
+  const newProject = { ...first, id: '10000000-0000-4000-8000-000000000003', name: '展会物料', sortOrder: 0 }
+  injected.workspace!.document.value.projects[1]!.sortOrder = 2
+  injected.workspace!.document.value.projects.push(newProject)
+  injected.workspace!.document.value.tasks[3]!.projectId = newProject.id
+  await flushPromises()
+  expect(rows()[0]!.attributes('data-task-id')).toBe(document.tasks[3]!.id)
+  expect(rows()[0]!.text()).toContain('展会物料')
+  expect(rows().map(row => row.attributes('data-task-id')).slice(-8, -6))
+    .toEqual([document.tasks[1]!.id, document.tasks[4]!.id])
+  expect(injected.workspace!.projects.value.map(p => p.id)).toEqual([newProject.id, first.id, second.id])
+})
+
+it('does not replace the manual focus shortlist when project sorting moves a fourth candidate first', async () => {
+  const { document } = loadProjectSortFixture()
+  for (const index of [1, 2, 4]) injected.workspace!.document.value.tasks[index]!.isFocus = true
+  const w = await mountToday()
+  const focusIds = () => w.findAll('[data-today-section="next"] [data-task-row]').map(row => row.attributes('data-task-id')).sort()
+  expect(focusIds()).toEqual([0, 1, 2].map(i => document.tasks[i]!.id).sort())
+  expect(w.find('option[value="project"]').exists()).toBe(true)
+  await w.get('[aria-label="任务排序"]').setValue('project')
+  expect(focusIds()).toEqual([0, 1, 2].map(i => document.tasks[i]!.id).sort())
+  expect(w.findAll('[data-today-section="other"] [data-task-row]')).toHaveLength(21)
+})
+
+it('preserves the manual third focus candidate when another project has the same sort position', async () => {
+  const { document } = loadProjectSortFixture()
+  for (const index of [1, 2, 4]) injected.workspace!.document.value.tasks[index]!.isFocus = true
+  injected.workspace!.document.value.tasks[4]!.sortOrder = 2
+  const w = await mountToday()
+  const focusIds = () => w.findAll('[data-today-section="next"] [data-task-row]').map(row => row.attributes('data-task-id')).sort()
+  const expected = [0, 1, 2].map(i => document.tasks[i]!.id).sort()
+  expect(focusIds()).toEqual(expected)
+  await w.get('[aria-label="任务排序"]').setValue('project')
+  expect(focusIds()).toEqual(expected)
+})
